@@ -1,0 +1,27 @@
+pandas>=2.0,<3.0
+numpy>=1.24,<2.0
+scipy>=1.10,<2.0
+scikit-learn>=1.3,<2.0
+xgboost>=2.0,<3.0
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0
+redis>=5.0,<6.0
+joblib>=1.3,<2.0
+python-dotenv>=1.0,<2.0
+
+# Scraping
+aiohttp>=3.9,<4.0
+beautifulsoup4>=4.12,<5.0
+html5lib>=1.1,<2.0
+lxml>=5.0,<6.0
+playwright>=1.40,<2.0
+playwright-stealth>=1.0,<2.0
+
+# Modeling-specific
+trueskill>=0.4,<1.0
+
+# Live bot
+discord-webhook>=1.3,<2.0
+
+# Diagnostics
+matplotlib>=3.7,<4.0

@@ -1,0 +1,61 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ============ Environments ============
+.env
+.env.local
+.env.*.local
+venv/
+.venv/
+env/
+ENV/
+
+# ============ IDEs ============
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ============ Model artifacts (too large / regeneratable) ============
+*.pkl
+*.joblib
+*.h5
+*.model
+
+# ============ Generated data / logs ============
+*.csv
+*.log
+drift_diagnostic_out/
+walk_forward_master_ledger.csv
+ensemble_oof_results.csv
+all_positive_ev_log.csv
+grid_results.csv
+model_a_oof_predictions.csv
+model_b_oof_predictions.csv
+live_config.json
+scrape_horse_no.log
+
+# ============ Data dumps ============
+*.sql.gz
+*.dump
+
+# ============ Playwright ============
+playwright-report/
+test-results/
+
+# Keep sample data if we add any
+!sample_data/*.csv

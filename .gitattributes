@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.sql   text eol=lf
+*.sh    text eol=lf
+*.json  text eol=lf
+
+# Mark shell scripts executable when checked out
+scripts/*.sh text eol=lf
