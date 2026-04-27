@@ -7,9 +7,7 @@ import logging
 import datetime
 import itertools
 import time
-
 from discord_webhook import DiscordWebhook
-
 from hkjc_engine.config import (
     redis_client,
     DB_URL,
@@ -17,6 +15,7 @@ from hkjc_engine.config import (
     LIVE_VENUE,
     LIVE_BANKROLL,
 )
+from hkjc_engine.live.snapshot_logger import SnapshotLogger
 from hkjc_engine.live.predictor import LiveRacePredictor
 from hkjc_engine.models.betting_policy import (
     get_ev_hurdle,
@@ -456,7 +455,7 @@ def send_to_discord(venue, race_no, meta, df_win, df_pla, df_qin, df_qpl, df_tri
     handle_discord_pool(venue, race_no, "TRI", df_tri.empty, tri_msg)
 
 
-def run_prediction_for_race(predictor, venue, race_no, is_closing=False):
+def run_prediction_for_race(predictor, venue, race_no, snap_logger, is_closing=False):
     print(f"\nFetching Live Data for {venue} Race {race_no}...")
     meta = get_dynamic_metadata(venue, race_no)
     if not meta:
@@ -502,7 +501,7 @@ def run_prediction_for_race(predictor, venue, race_no, is_closing=False):
             results['live_odds'].to_numpy(dtype=float),
             horse_nos,
             codes)):
-        if pd.isna(d) or d <= 1.0:
+        if pd.isna(d) or d < 1.0:
             continue
         p_adj  = min(p * SHRINKAGE, 1 - 1e-9)
         ev_adj = p_adj * d - 1.0
@@ -529,7 +528,7 @@ def run_prediction_for_race(predictor, venue, race_no, is_closing=False):
     pla_rows = []
     for i, (hn, hc) in enumerate(zip(horse_nos, codes)):
         p_odds = float(results['live_pla_odds'].iloc[i])
-        if pd.isna(p_odds) or p_odds <= 1.0:
+        if pd.isna(p_odds) or p_odds < 1.0:
             continue
         pp     = p_place(p_arr, i)
         p_adj  = min(pp * SHRINKAGE, 1 - 1e-9)
@@ -567,6 +566,47 @@ def run_prediction_for_race(predictor, venue, race_no, is_closing=False):
                 d.loc[d['stake'] > 0, 'stake'] *= shrink
                 # Zero out any rows shrunk below min
                 d.loc[(d['stake'] > 0) & (d['stake'] < MIN_STAKE_ABS), 'stake'] = 0.0
+    # ---- Persist recommendations to snapshot_recommendations ----
+    try:
+        recs = []
+        for d, pool, combo_col in [(df_win, "WIN", "horse"),
+                                    (df_pla, "PLA", "horse"),
+                                    (df_qin, "QIN", "combo"),
+                                    (df_qpl, "QPL", "combo"),
+                                    (df_tri, "TRI", "combo")]:
+            if d.empty:
+                continue
+            for _, row in d.iterrows():
+                recs.append({
+                    "pool": pool,
+                    "combination": str(row[combo_col]),
+                    "live_odds": float(row["odds"]),
+                    "p_raw": float(row["p_model"]),
+                    "p_shrunk": min(float(row["p_model"]) * SHRINKAGE, 1 - 1e-9),
+                    "stake": float(row["stake"]),
+                })
+        if recs:
+            race_id = f"{datetime.datetime.now().strftime('%Y%m%d')}_{venue}_{race_no:02d}"
+            try:
+                race_off_dt = datetime.datetime.strptime(
+                    race_time, "%H:%M"
+                ).replace(year=datetime.datetime.now().year,
+                          month=datetime.datetime.now().month,
+                          day=datetime.datetime.now().day,
+                          tzinfo=datetime.timezone.utc)
+            except Exception:
+                race_off_dt = datetime.datetime.now(datetime.timezone.utc)
+
+            snap_logger.log_snapshot(
+                race_id=race_id,
+                race_off_time=race_off_dt,
+                bankroll=BANKROLL,
+                recommendations=recs,
+                config={"theta_2": THETA_2, "theta_3": THETA_3,
+                        "shrinkage": SHRINKAGE},
+            )
+    except Exception as e:
+        logging.error(f"Snapshot log failed for R{race_no}: {e}")
 
     # Console summary
     def _n_bets(d):
@@ -588,6 +628,7 @@ def run_prediction_for_race(predictor, venue, race_no, is_closing=False):
 
 if __name__ == "__main__":
     predictor = LiveRacePredictor(DB_URL)
+    snap_logger = SnapshotLogger(DB_URL)
     closed_processed = set()
 
     print(f"--- LIVE BOT START | venue={VENUE} | shrinkage={SHRINKAGE:.3f} "
@@ -604,7 +645,7 @@ if __name__ == "__main__":
                 if get_race_status(VENUE, r_no) == 'CLOSED':
                     print(f"R{r_no} STOP_SELL — sending final closing snapshot.")
                     try:
-                        run_prediction_for_race(predictor, VENUE, r_no, is_closing=True)
+                        run_prediction_for_race(predictor, VENUE, r_no, snap_logger, is_closing=True)
                     except Exception as e:
                         logging.exception(f"Closing snapshot R{r_no} failed: {e}")
                     closed_processed.add(r_no)
@@ -621,7 +662,7 @@ if __name__ == "__main__":
                 if get_race_status(VENUE, r_no) == 'CLOSED':
                     continue
                 try:
-                    run_prediction_for_race(predictor, VENUE, r_no)
+                    run_prediction_for_race(predictor, VENUE, r_no, snap_logger)
                 except Exception as e:
                     logging.exception(f"Race {r_no} failed: {e}")
 

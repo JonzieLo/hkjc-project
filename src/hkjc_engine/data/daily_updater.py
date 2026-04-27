@@ -15,6 +15,7 @@ import sys
 
 from hkjc_engine.config import DB_URL
 from hkjc_engine.data import (
+    scraper,
     scraper_dividends,
     scraper_horse_numbers,
     patch_finish_position,
@@ -37,8 +38,8 @@ def run_daily_update(target_date: str) -> None:
     logging.info("=" * 60)
 
     logging.info("\n--- PHASE 1: SCRAPING NEW DATA ---")
-    # scraper.py (the main entries + results scraper) is not bundled in this extract. The dividend & horse-number patchers downstream cover most of the race_entries schema via HKJC's results page.
-    asyncio.run(scraper_dividends.main())
+    asyncio.run(scraper.main(target_date))
+    asyncio.run(scraper_dividends.main(target_date))
     asyncio.run(scraper_horse_numbers.main(target_date))
 
     logging.info("\n--- PHASE 2: PATCHING MISSING FIELDS ---")

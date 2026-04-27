@@ -8,6 +8,7 @@ from hkjc_engine.models.trainer_residual import XGBResidualTrainer
 from hkjc_engine.models.trainer_independent import XGBIndependentTrainer
 from hkjc_engine.models.ensemble import EnsembleOptimizer
 from hkjc_engine.models.backtester import XGBEnsembleBacktester
+from hkjc_engine.models.theta_optimizer import calibrate_global
 from hkjc_engine.config import DB_URL
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -25,7 +26,7 @@ def run_walk_forward_validation():
     master_ledger = []
     current_bankroll = 100000.0 
     
-    print("=" * 50)
+    print("=" * 50)    
     print(" STARTING LOG-LINEAR WALK-FORWARD TEST")
     print("=" * 50)
 
@@ -83,6 +84,27 @@ def run_walk_forward_validation():
         except Exception as e:
             logging.warning(f"Failed to calculate dynamic shrinkage, defaulting to 0.85. Error: {e}")
             dyn_shrinkage = 0.85
+
+        try:
+            theta_input = df_oof[['race_id', 'horse_code', 'finish_position']].copy()
+            theta_input['P_model'] = df_oof['P_ens']
+            theta_csv_path = 'wf_theta_input.csv'
+            theta_input.to_csv(theta_csv_path, index=False)
+
+            theta_fit = calibrate_global(csv_path=theta_csv_path, n_bootstrap=0)
+            THETA_2 = theta_fit['theta_2']
+            THETA_3 = theta_fit['theta_3']
+            logging.info(f"Dynamic theta this window: t2={THETA_2:.4f} t3={THETA_3:.4f}")
+
+            # Persist alongside live_config.json so run_bot.py can pick them up
+            with open('live_config.json', 'w') as f:
+                json.dump({
+                    'shrinkage': float(dyn_shrinkage),
+                    'theta_2':   float(THETA_2),
+                    'theta_3':   float(THETA_3),
+                }, f)
+        except Exception as e:
+            logging.warning(f"Failed to refit theta this window, using global defaults. Error: {e}")
         logging.info(f"Backtesting on unseen data: {window_test_start} to {window_test_end}...")
         
         backtester = XGBEnsembleBacktester(db_url=DB_URL, stacker_path='wf_stacker.pkl', shrinkage=dyn_shrinkage, starting_bankroll=current_bankroll)

@@ -13,7 +13,6 @@ r_cache = redis_client()
 today = datetime.datetime.now().strftime("%Y-%m-%d")
 # today = '2026-04-06'
 
-# How long (seconds) to keep polling the API after STOP_SELL is first seen. HKJC's tote continues to update dividends for 1-3 minutes after sell stops as late money settles into the final pools.
 POST_STOP_SELL_POLL_SECONDS = 180
 
 
@@ -64,6 +63,7 @@ class HKJCLiveScraper:
                     if 'pmPools' in first_meeting:
                         pools = first_meeting.get('pmPools', [])
                         saved_pools = []
+                        pool_totals_update = {}
                         for p in pools:
                             o_type = p.get('oddsType')
                             races = p.get('leg', {}).get('races', [])
@@ -101,6 +101,7 @@ class HKJCLiveScraper:
                                     f"race_status:{self.venue}:{self.race_no}",
                                     300, status
                                 )
+                            
                             # else: post_stop_sell_mode AND status != STOP_SELL  → ignore so CLOSED written by scrape_loop sticks
                             if o_type and int(self.race_no) in races:
                                 isolated_payload = {
@@ -129,6 +130,13 @@ class HKJCLiveScraper:
 
             class_match = re.search(r'CLASS\s+(\d)', info_text, re.I)
             race_class = f"Class {class_match.group(1)}" if class_match else "Unknown"
+            if race_class == "Unknown":
+                if "GROUP ONE" in info_text.upper():
+                    race_class = "Group 1"
+                if "GROUP TWO" in info_text.upper():
+                    race_class = "Group 2"
+                if "GROUP THREE" in info_text.upper():
+                    race_class = "Group 3"
 
             rail = "A"
             if "ALL WEATHER" in info_text.upper() or "AWT" in info_text.upper():

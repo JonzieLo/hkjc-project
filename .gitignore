@@ -39,7 +39,13 @@ ENV/
 # ============ Generated data / logs ============
 *.csv
 *.log
+pack_for_ai.py
+hkjc_project_prod.txt
 drift_diagnostic_out/
+artifacts/
+backtest_inputs/
+backtest_out/
+calibration_out/
 walk_forward_master_ledger.csv
 ensemble_oof_results.csv
 all_positive_ev_log.csv
@@ -52,6 +58,8 @@ scrape_horse_no.log
 # ============ Data dumps ============
 *.sql.gz
 *.dump
+statements/
+contextual_thetas.json
 
 # ============ Playwright ============
 playwright-report/

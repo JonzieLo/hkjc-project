@@ -1,9 +1,11 @@
 import subprocess
 import time
 import sys
+from hkjc_engine.config import LIVE_VENUE
 
-RACES_TO_MONITOR = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-VENUE = "HV"
+
+TOTAL_RACES = 11 if LIVE_VENUE == 'ST' else 9
+VENUE = LIVE_VENUE
 
 
 ###### PARALLEL ######
@@ -34,15 +36,15 @@ VENUE = "HV"
 
 
 ###### SEQUENTIAL ######
-print(f"Launching Sequential Syndicate Scraper for {len(RACES_TO_MONITOR)} races...")
+print(f"Launching Sequential Syndicate Scraper for {TOTAL_RACES} races...")
 
 try:
-    for r_no in RACES_TO_MONITOR:
+    for r_no in range(1, TOTAL_RACES + 1):
         print(f"\n{'='*50}")
         print(f" Starting Monitor for {VENUE} Race {r_no}")
         print(f"{'='*50}")
 
-        p = subprocess.Popen([sys.executable, "live_scraper.py", VENUE, str(r_no)])
+        p = subprocess.Popen([sys.executable, "-m", "hkjc_engine.live.scraper", VENUE, str(r_no)])
         p.wait() 
         
         print(f" Race {r_no} scraper exited. Waiting 5 seconds before launching next race...")

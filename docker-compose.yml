@@ -5,28 +5,38 @@
 #   docker compose up -d
 
 services:
-  postgres:
+  hkjc_postgres:
     image: postgres:15-alpine
-    container_name: hkjc_postgres
-    restart: unless-stopped
+    container_name: hkjc_db
     environment:
-      POSTGRES_USER: ${HKJC_DB_USER:-hkjc}
-      POSTGRES_PASSWORD: ${HKJC_DB_PASSWORD:?HKJC_DB_PASSWORD must be set in .env}
-      POSTGRES_DB: ${HKJC_DB_NAME:-hkjc_racing}
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: supersecretpassword
+      POSTGRES_DB: hkjc_racing
     ports:
       - "5432:5432"
     volumes:
       - hkjc_pgdata:/var/lib/postgresql/data
-      - ./sql/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HKJC_DB_USER:-hkjc}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  redis:
+  hkjc_redis:
     image: redis:7-alpine
-    container_name: hkjc_redis
-    restart: unless-stopped
+    container_name: hkjc_live_cache
     ports:
       - "6379:6379"
     volumes:
       - hkjc_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   hkjc_pgdata:
+    external: true
+    name: hkjc_project_hkjc_pgdata
   hkjc_redisdata:

@@ -77,7 +77,7 @@ class LiveRacePredictor:
                     r.race_date  AS last_race_date,
                     ROW_NUMBER() OVER(
                         PARTITION BY e.horse_code
-                        ORDER BY r.race_date DESC
+                        ORDER BY r.race_date DESC, r.race_no DESC
                     ) AS rn
                 FROM race_entries e
                 JOIN races r ON e.race_id = r.race_id
@@ -110,18 +110,23 @@ class LiveRacePredictor:
         # --- Historical Enrichment ---
         hist = self._fetch_historical_states(df['horse_code'].tolist())
         df['is_maiden'] = df['horse_code'].map(lambda x: 1 if x not in hist else 0)
-        for col in ('ema_early_z', 'ema_mid_z', 'ema_finish_z',
-                    'pre_race_mu', 'pre_race_sigma'):
+        for col in ('ema_early_z', 'ema_mid_z', 'ema_finish_z'):
             df[col] = df['horse_code'].map(
                 lambda x, c=col: hist.get(x, {}).get(c, 0.0)
             )
+    
+        for col, sentinel in (('pre_race_mu', None), ('pre_race_sigma', None)):
+            df[col] = df['horse_code'].map(
+                lambda x, c=col: hist.get(x, {}).get(c)  # returns None if missing
+            )
 
-        df['last_class']     = df['horse_code'].map(
-            lambda x: hist.get(x, {}).get('last_race_class', ''))
+        _CLASS_UNKNOWN_SENTINEL = 99 
+        df['last_class']     = df['horse_code'].map(lambda x: hist.get(x, {}).get('last_race_class', ''))
         df['last_class_lvl'] = df['last_class'].apply(self._class_level)
         today_lvl            = self._class_level(today_class)
-        df['is_class_drop']  = (df['last_class_lvl'] < today_lvl).astype(float)
-        df['is_class_rise']  = (df['last_class_lvl'] > today_lvl).astype(float)
+        has_class_history = df['last_class_lvl'] != _CLASS_UNKNOWN_SENTINEL
+        df['is_class_drop'] = (has_class_history & (df['last_class_lvl'] < today_lvl)).astype(float)
+        df['is_class_rise'] = (has_class_history & (df['last_class_lvl'] > today_lvl)).astype(float)
 
         df['last_race_date'] = df['horse_code'].map(
             lambda x: hist.get(x, {}).get('last_race_date'))

@@ -8,12 +8,13 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Numeric, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
-from hkjc_engine.config import DB_URL
+from hkjc_engine.config import DB_URL, LIVE_VENUE
 
 # DB_URL loaded from hkjc_engine.config
 engine = create_engine(DB_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+venue = LIVE_VENUE
 
 class RaceDividend(Base):
     __tablename__ = 'race_dividends'
@@ -124,10 +125,11 @@ def save_to_db(dividends):
     finally:
         session.close()
 
-async def main():
+async def main(target_date_str=None):
     scraper = HKJCDividendScraper(max_concurrent_requests=8)
 
-    target_date = sys.argv[1] if len(sys.argv) > 1 else None
+    if target_date_str is None and len(sys.argv) > 1:
+        target_date_str = sys.argv[1]
 
     logging.info("Querying database for valid race meetings...")
     with engine.connect() as conn:
@@ -142,10 +144,10 @@ async def main():
         """
         params = {}
 
-        if target_date:
-            query_str += " WHERE r1.race_date = :target_date "
-            params['target_date'] = target_date
-            logging.info(f"Filtering dividends for specific date: {target_date}")
+        if target_date_str:
+            query_str += " AND r1.race_date = CAST(:target_date AS DATE) "
+            params['target_date'] = target_date_str
+            logging.info(f"Filtering dividends for specific date: {target_date_str}")
             
         query_str += " GROUP BY race_date, venue ORDER BY race_date DESC"
         
