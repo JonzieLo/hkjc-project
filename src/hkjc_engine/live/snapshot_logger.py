@@ -2,23 +2,12 @@
 snapshot_logger.py
 ==================
 
-Postgres-backed logger for closing-snapshot recommendations. Writes one row
-per (race, pool, combination) the bot evaluated at snapshot time, so we can
-later join against race_dividends to compute realised PnL on every
-recommendation -- whether or not it was actually placed.
-
-Why Postgres rather than CSV:
-  - The bot writes during races; reconciliation reads after races. A CSV's
-    append-only pattern doesn't tolerate concurrent access cleanly.
-  - Joining to race_dividends and live_odds_history happens in SQL with a
-    proper index, not by loading two CSVs into pandas.
-  - Crashes mid-write don't leave half-rows; transactions guarantee atomicity.
-  - Indexed lookups stay fast as the table grows over months/years.
+Postgres-backed logger for closing-snapshot recommendations.
+Writes one row per (race, pool, combination) the bot evaluated at snapshot time, so we can later join against race_dividends to compute realised PnL on every recommendation -- whether or not it was actually placed.
 
 Schema
 ------
-DDL is defined in this module and idempotent (CREATE IF NOT EXISTS). First
-call to SnapshotLogger() ensures the table and indexes exist.
+DDL is defined in this module and idempotent (CREATE IF NOT EXISTS). First call to SnapshotLogger() ensures the table and indexes exist.
 
     snapshot_recommendations
     ------------------------
