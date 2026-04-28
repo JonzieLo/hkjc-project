@@ -1,12 +1,6 @@
 """
 account_statement_ingester.py
 =============================
-
-Parses HKJC's "Account Records" text export and writes structured rows to
-a `placed_bets` table. Designed to be idempotent: re-running on the same
-file (or overlapping date ranges) does NOT create duplicates -- the
-ref_no field is a stable HKJC primary key.
-
 Handles:
     - WIN, PLACE single bets
     - QUINELLA, QUINELLA-PLACE pairs (simple)
@@ -24,8 +18,7 @@ Schema is defined in this module and idempotent.
 
 Usage
 -----
-    python -m hkjc_engine.live.account_statement_ingester \\
-        --statement_file ./statements/acctstmt_2026-04-26.txt
+    python -m hkjc_engine.live.account_statement_ingester --statement_file ./statements/acctstmt_2026-04-26.txt
 """
 from __future__ import annotations
 

@@ -2,31 +2,20 @@
 slippage_attribution.py
 =======================
 
-Joins `placed_bets` to the nearest-in-time row in `snapshot_recommendations`
-for the same (race_id, pool, combination), producing a per-ticket attribution
-of where PnL came from:
+Joins `placed_bets` to the nearest-in-time row in `snapshot_recommendations` for the same (race_id, pool, combination), producing a per-ticket attribution of where PnL came from:
 
-    bet_ev_at_placement   = ev_pct from the recommendation snapshot closest
-                             in time to placed_at
-    closing_odds_drift     = live_odds_at_snapshot (closest snapshot before
-                             placement) vs. snapshot AT placement time
+    bet_ev_at_placement   = ev_pct from the recommendation snapshot closest in time to placed_at
+    closing_odds_drift     = live_odds_at_snapshot (closest snapshot before placement) vs. snapshot AT placement time
     realised_vs_expected   = realised_pnl - (stake * ev_at_placement)
 
 Three diagnostics fall out:
 
-  1. Per-pool aggregate of stake-weighted EV vs. realised PnL. If they
-     diverge, your bot's EV estimates are systematically biased -- a model
-     issue.
+  1. Per-pool aggregate of stake-weighted EV vs. realised PnL. If they diverge, your bot's EV estimates are systematically biased -- a model issue.
 
-  2. Per-ticket residual: realised - expected. The variance of this
-     residual at the pool level is your noise floor; the mean is your
-     systematic edge (or drag).
+  2. Per-ticket residual: realised - expected. The variance of this residual at the pool level is your noise floor; the mean is your systematic edge (or drag).
 
-  3. Odds-at-placement vs. odds-at-close. If the bot logs the same
-     recommendation at multiple snapshots and you bet partway through, the
-     gap between the EV the bot was showing AT YOUR PLACEMENT TIME vs. the
-     EV at close tells you slippage. If close-time EV is consistently lower
-     than placement-time EV, you're getting picked off by late money.
+  3. Odds-at-placement vs. odds-at-close. If the bot logs the same recommendation at multiple snapshots and you bet partway through, the gap between the EV the bot was showing AT YOUR PLACEMENT TIME vs. the EV at close tells you slippage. 
+  If close-time EV is consistently lower than placement-time EV, you're getting picked off by late money.
 
 Usage
 -----
