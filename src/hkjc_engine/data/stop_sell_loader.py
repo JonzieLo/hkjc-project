@@ -3,29 +3,20 @@ Point-in-time STOP_SELL odds loader.
 
 Purpose
 -------
-The training pipeline used to anchor `base_margin` on `race_entries.win_odds`,
-which is the FINAL settled dividend — i.e. it includes the late-money
-syndicate drop the live bot CANNOT see at execution time. This module
-extracts the odds that WERE observable at STOP_SELL from
-`live_odds_history` so the trainer/backtester can use a point-in-time
-correct anchor.
+The training pipeline used to anchor `base_margin` on `race_entries.win_odds`, which is the FINAL settled dividend — i.e. it includes the late-money syndicate drop the live bot CANNOT see at execution time.
+This module extracts the odds that WERE observable at STOP_SELL from `live_odds_history` so the trainer/backtester can use a point-in-time correct anchor.
 
 Resolution rules (per (race_id, pool_type, combination))
 --------------------------------------------------------
-1. PRIMARY:   first POST_STOP_SELL row (smallest seconds_vs_stop_sell >= 0).
-              This is the odds quote at the instant sales actually closed.
-2. FALLBACK:  last PRE_STOP_SELL row.
-              Used when the archiver missed the POST_STOP_SELL window.
+1. PRIMARY:   first POST_STOP_SELL row (smallest seconds_vs_stop_sell >= 0). This is the odds quote at the instant sales actually closed.
+2. FALLBACK:  last PRE_STOP_SELL row. Used when the archiver missed the POST_STOP_SELL window.
 3. FAIL:      caller falls back to FINAL odds adjusted by drift.
 
-Pre-Plan-C history (no `phase` markers) is treated as PRIMARY-missing /
-FALLBACK-missing — caller decides whether to drop or impute.
+Pre-Plan-C history (no `phase` markers) is treated as PRIMARY-missing / FALLBACK-missing — caller decides whether to drop or impute.
 
 Performance
 -----------
-For full-history training queries, prefer the `stop_sell_anchor`
-materialised view in sql/migrations/002_stop_sell_anchor.sql, which is
-indexed and ~50x faster than the LATERAL JOIN below for >100k races.
+For full-history training queries, prefer the `stop_sell_anchor` materialised view in sql/migrations/002_stop_sell_anchor.sql, which is indexedfaster than LATERAL JOIN below for >100k races.
 """
 from __future__ import annotations
 
@@ -38,13 +29,6 @@ from sqlalchemy import create_engine, text
 
 log = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Core extraction queries
-# ---------------------------------------------------------------------------
-
-# WIN-pool anchor: keyed by (race_id, horse_no). Used by Model A base_margin
-# and by the stacker's P_mkt computation.
 _Q_WIN_ANCHOR = text("""
     WITH ranked AS (
         SELECT
@@ -78,9 +62,6 @@ _Q_WIN_ANCHOR = text("""
     WHERE rn = 1
 """)
 
-
-# Generic per-pool anchor: keyed by (race_id, pool_type, combination).
-# Used for exotics (QIN, QPL, TRI, PLA).
 _Q_POOL_ANCHOR = text("""
     WITH ranked AS (
         SELECT
@@ -109,10 +90,6 @@ _Q_POOL_ANCHOR = text("""
 """)
 
 
-# Final odds (from race_dividends-style settled snapshot) used to
-# construct the drift label R = d_final / d_stop_sell when training the
-# drift forecaster. We use FINAL phase from live_odds_history because the
-# scraper (odds_archiver.py) writes it AFTER the late-money window.
 _Q_FINAL_ANCHOR = text("""
     SELECT DISTINCT ON (race_id, pool_type, combination)
         race_id, pool_type, combination, odds AS final_odds
@@ -124,18 +101,8 @@ _Q_FINAL_ANCHOR = text("""
 """)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def fetch_win_anchor(engine, race_ids: Iterable[str]) -> pd.DataFrame:
-    """Return DataFrame[race_id, horse_no, stop_sell_odds, phase, seconds_vs_stop_sell].
-
-    `horse_no` is a string (e.g. '1', '12') matching the `combination`
-    column in `live_odds_history` for WIN-pool entries. Caller must cast
-    to int and join against `race_entries.horse_no` to merge with the
-    feature dataframe.
-    """
     race_ids = list(race_ids)
     if not race_ids:
         return pd.DataFrame(columns=['race_id', 'horse_no', 'stop_sell_odds',
@@ -157,8 +124,7 @@ def fetch_pool_anchor(engine,
         return pd.DataFrame(columns=['race_id', 'pool_type', 'combination',
                                      'stop_sell_odds', 'phase'])
     with engine.connect() as conn:
-        df = pd.read_sql(_Q_POOL_ANCHOR, conn,
-                         params={'race_ids': race_ids, 'pools': pools})
+        df = pd.read_sql(_Q_POOL_ANCHOR, conn, params={'race_ids': race_ids, 'pools': pools})
     df['stop_sell_odds'] = df['stop_sell_odds'].astype(float)
     return df
 
@@ -175,10 +141,6 @@ def fetch_final_anchor(engine,
     df['final_odds'] = df['final_odds'].astype(float)
     return df
 
-
-# ---------------------------------------------------------------------------
-# Joining helpers
-# ---------------------------------------------------------------------------
 
 def attach_win_anchor(df: pd.DataFrame,
                       engine,
@@ -231,9 +193,16 @@ def attach_win_anchor(df: pd.DataFrame,
 
     miss = df['stop_sell_odds'].isna()
     n_miss = int(miss.sum())
+    n_total = len(df)
     if n_miss > 0:
-        log.info("STOP_SELL anchor: %d / %d entries missing live snapshot; "
-                 "applying fallback=%s.", n_miss, len(df), fallback)
+        # Partial coverage is a real data-integrity signal worth surfacing (e.g. one horse mis-mapped to live_odds_history). 
+        # All-missing or all-present is routine — suppress to DEBUG to avoid log spam in pre-Plan-C training windows where every race lacks live coverage.
+        # Re-enable with:
+        #   logging.getLogger('hkjc_engine.data.stop_sell_loader').setLevel(logging.DEBUG)
+        is_partial = 0 < n_miss < n_total
+        log_fn = log.info if is_partial else log.debug
+        log_fn("STOP_SELL anchor: %d / %d entries missing live snapshot; "
+               "applying fallback=%s.", n_miss, n_total, fallback)
         if fallback == 'final':
             df.loc[miss, 'stop_sell_odds'] = df.loc[miss, odds_col].astype(float)
         elif fallback == 'final_with_drift_adj':

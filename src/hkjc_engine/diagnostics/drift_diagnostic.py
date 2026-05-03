@@ -1,4 +1,3 @@
-from hkjc_engine.config import DB_URL
 """
 Drift diagnostic — Option B (scheduled-race-time anchor).
 
@@ -22,8 +21,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sqlalchemy import create_engine, text
 from pathlib import Path
+from hkjc_engine.config import DB_URL
 
-# DB_URL loaded from hkjc_engine.config
 OUT_DIR = Path("drift_diagnostic_out")
 OUT_DIR.mkdir(exist_ok=True)
 

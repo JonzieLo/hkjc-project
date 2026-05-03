@@ -16,11 +16,25 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 venue = LIVE_VENUE
 
+
+_POOL_CODE_MAP = {
+    'WIN': 'WIN', 'WINNER': 'WIN',
+    'PLACE': 'PLA', 'PLA': 'PLA',
+    'QUINELLA': 'QIN', 'QIN': 'QIN',
+    'QUINELLA PLACE': 'QPL', 'QPL': 'QPL',
+    'TRIO': 'TRI', 'TRI': 'TRI',
+}
+
+
+def _to_pool_code(raw_pool: str) -> str | None:
+    return _POOL_CODE_MAP.get(str(raw_pool).strip().upper())
+
 class RaceDividend(Base):
     __tablename__ = 'race_dividends'
     id = Column(Integer, primary_key=True)
     race_id = Column(String(50), index=True)
     pool = Column(String(100)) 
+    pool_code = Column(String(8), index=True)
     combination = Column(String(500)) 
     dividend = Column(Numeric(12, 2)) 
 
@@ -99,6 +113,7 @@ class HKJCDividendScraper:
                     dividends.append({
                         'race_id': race_id,
                         'pool': current_pool,
+                        'pool_code': _to_pool_code(current_pool),
                         'combination': clean_combo,
                         'dividend': float(div_val)
                     })

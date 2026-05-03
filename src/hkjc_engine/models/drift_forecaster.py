@@ -241,17 +241,31 @@ def build_win_features(engine, race_ids: Iterable[str]) -> pd.DataFrame:
     odds_pivot = odds_pivot.merge(hhi_t0, on='race_id').merge(hhi_m30, on='race_id')
     odds_pivot['dhhi_30s'] = odds_pivot['hhi_at_stop_sell'] - odds_pivot['hhi_m30s']
 
-    fav_dlog = (odds_pivot.loc[odds_pivot['rank_at_stop_sell'] == 1,
-                               ['race_id', 'dlog_p_30s']]
+    # NOTE on joint-rank handling: `rank(method='dense')` assigns the same
+    # rank to horses with identical odds (e.g. two horses both at 3.5). If
+    # we naively merged `fav_dlog` (filtered to rank == 1) on race_id, the
+    # join would be N:M for races with joint favorites and Cartesian-
+    # explode `odds_pivot`, duplicating every horse 2x. We collapse to
+    # one row per race here by averaging the drift across joint-rank
+    # horses so the merge is strictly 1:N.
+    fav_dlog = (odds_pivot.loc[odds_pivot['rank_at_stop_sell'] == 1]
+                .groupby('race_id', as_index=False)['dlog_p_30s'].mean()
                 .rename(columns={'dlog_p_30s': 'dlog_p_30s_fav'}))
-    snd_dlog = (odds_pivot.loc[odds_pivot['rank_at_stop_sell'] == 2,
-                               ['race_id', 'dlog_p_30s']]
+    snd_dlog = (odds_pivot.loc[odds_pivot['rank_at_stop_sell'] == 2]
+                .groupby('race_id', as_index=False)['dlog_p_30s'].mean()
                 .rename(columns={'dlog_p_30s': 'dlog_p_30s_2nd'}))
     odds_pivot = (odds_pivot
                   .merge(fav_dlog, on='race_id', how='left')
                   .merge(snd_dlog, on='race_id', how='left'))
     odds_pivot[['dlog_p_30s_fav', 'dlog_p_30s_2nd']] = (
         odds_pivot[['dlog_p_30s_fav', 'dlog_p_30s_2nd']].fillna(0.0))
+
+    # Belt-and-braces: drop any (race_id, horse_no) duplicate that may
+    # have slipped through earlier merges. Cheap insurance against
+    # future bugs that could re-introduce a Cartesian product.
+    odds_pivot = odds_pivot.drop_duplicates(
+        subset=['race_id', 'horse_no'], keep='first',
+    ).reset_index(drop=True)
 
     # ---- field_size ----
     odds_pivot['field_size'] = grp['horse_no'].transform('nunique')
@@ -294,6 +308,11 @@ def _qin_inconsistency_per_race(win_df: pd.DataFrame,
 
     rows: list[dict] = []
     for race_id, win_g in win_df.groupby('race_id'):
+        # Defensive dedup: even though build_win_features collapses
+        # joint-rank rows upstream, dropping duplicates here keeps the
+        # `set_index` -> `.loc[str(a)]` path returning a scalar rather
+        # than a Series if a future upstream change re-introduces dupes.
+        win_g = win_g.drop_duplicates('horse_no', keep='first')
         p = win_g.set_index('horse_no')['p_t0'].astype(float)
         n = len(p)
         if n < 2:
