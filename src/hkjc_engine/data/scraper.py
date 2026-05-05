@@ -4,6 +4,7 @@ import random
 import re
 import sys
 import logging
+import json
 import pandas as pd
 from io import StringIO
 from bs4 import BeautifulSoup
@@ -70,9 +71,20 @@ class HKJCAsyncScraper:
                 if select:
                     for option in select.find_all('option'):
                         raw_date = option['value']
+                        if raw_date and raw_date.startswith('{'):
+                            try:
+                                parsed_json = json.loads(raw_date)
+                                raw_date = parsed_json.get("date", raw_date)
+                            except json.JSONDecodeError:
+                                pass
+                        try:
+                            d_obj = datetime.strptime(raw_date, "%d/%m/%Y")
+                            formatted_date = d_obj.strftime("%Y/%m/%d")
 
-                        d_obj = datetime.strptime(raw_date, "%d/%m/%Y")
-                        formatted_date = d_obj.strftime("%Y/%m/%d")
+                            if start_year <= d_obj.year <= end_year:
+                                valid_dates.add(formatted_date)
+                        except ValueError:
+                            continue
 
                         if start_year <= d_obj.year <= end_year:
                             valid_dates.add(formatted_date)

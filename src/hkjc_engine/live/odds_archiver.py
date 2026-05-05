@@ -279,7 +279,7 @@ if __name__ == "__main__":
             # Tighter cadence inside the post-STOP_SELL window to catch every tote settlement tick before CLOSED arrives.
             if race_status in ('STOP_SELL', 'STOPSELL'):
                 time.sleep(5)
-            elif seconds_to_jump <= 120 and seconds_to_jump > -600:
+            elif seconds_to_jump <= 120:
                 time.sleep(5)
             elif seconds_to_jump <= 300:
                 time.sleep(12)

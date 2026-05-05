@@ -31,7 +31,7 @@ from hkjc_engine.data.stop_sell_loader import (
     attach_win_anchor,
     coverage_report,
 )
-from hkjc_engine.models.ensemble import BetaCalibrator
+from hkjc_engine.models.ensemble import SmoothedIsotonicCalibrator
 from hkjc_engine.models.feature_factory import (
     HKJCFeatureFactory,
     calculate_base_margin,
@@ -195,11 +195,11 @@ class XGBResidualTrainer:
                      log_loss(y, df['P_pub_stop']))
 
         # Calibrator
-        calibrator = BetaCalibrator().fit(df['P_model'].values, y.values)
+        calibrator = SmoothedIsotonicCalibrator().fit(df['P_model'].values, y.values)
         joblib.dump(calibrator, calibrator_path)
+        
         df['P_cal_raw'] = calibrator.predict(df['P_model'].values)
-        df['P_calibrated'] = (df['P_cal_raw']
-                              / df.groupby('race_id')['P_cal_raw'].transform('sum'))
+        df['P_calibrated'] = (df['P_cal_raw'] / df.groupby('race_id')['P_cal_raw'].transform('sum'))
         logging.info("OOF LogLoss — pre-cal: %.5f | post-cal: %.5f",
                      log_loss(y, df['P_model']),
                      log_loss(y, df['P_calibrated']))

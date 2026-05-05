@@ -283,10 +283,9 @@ from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
 r_cache = redis_client()
-# today = datetime.datetime.now().strftime("%Y-%m-%d")
-today = '2026-05-03'
+today = datetime.datetime.now().strftime("%Y-%m-%d")
 
-POST_STOP_SELL_POLL_SECONDS = 180
+POST_STOP_SELL_POLL_SECONDS = 600
 
 class HKJCLiveScraper:
     def __init__(self, venue, race_no):
@@ -296,6 +295,7 @@ class HKJCLiveScraper:
         
         self.stop_sell_seen_at = None
         self.post_stop_sell_mode = False
+        self.race_closed = False
 
     async def get_time_to_race(self):
         data = r_cache.get(f"live_race_metadata:{self.venue}:{self.race_no}")
@@ -353,9 +353,13 @@ class HKJCLiveScraper:
                             races = p.get('leg', {}).get('races', [])
                             if not races: races = p.get('races', [])
                             status = str(p.get('status') or p.get('poolStatus') or p.get('sellStatus', '')).upper()
-
+                            if status in ('CLOSED', 'DIVIDEND', 'PAYOUT', 'REFUND'):
+                                if not self.race_closed:
+                                    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] API returned terminal state '{status}'. Moving to next race.")
+                                    r_cache.setex(f"race_status:{self.venue}:{self.race_no}", 600, 'CLOSED')
+                                    self.race_closed = True
                             # State Machine transitions
-                            if status in ('STOP_SELL', 'STOPSELL'):
+                            elif status in ('STOP_SELL', 'STOPSELL'):
                                 if not self.post_stop_sell_mode:
                                     self.stop_sell_seen_at = datetime.datetime.now()
                                     self.post_stop_sell_mode = True
@@ -432,6 +436,9 @@ class HKJCLiveScraper:
                 
                 url_index = 0
                 while True:
+                    if self.race_closed:
+                        print("Shutting down browser and exiting scraper.")
+                        break
                     if self.post_stop_sell_mode and self.stop_sell_seen_at is not None:
                         elapsed = (datetime.datetime.now() - self.stop_sell_seen_at).total_seconds()
                         if elapsed >= POST_STOP_SELL_POLL_SECONDS:
@@ -440,9 +447,9 @@ class HKJCLiveScraper:
                             break
 
                     seconds_to_jump = await self.get_time_to_race()
-                    if seconds_to_jump < -600 and not self.post_stop_sell_mode:
-                        r_cache.setex(f"race_status:{self.venue}:{self.race_no}", 600, 'CLOSED')
-                        break
+                    # if seconds_to_jump < -600 and not self.post_stop_sell_mode:
+                    #     r_cache.setex(f"race_status:{self.venue}:{self.race_no}", 600, 'CLOSED')
+                    #     break
 
                     current_pool_url, pool_type = pool_urls[url_index % len(pool_urls)]
                     try:
@@ -460,10 +467,19 @@ class HKJCLiveScraper:
                     url_index += 1
 
                     # Variable Polling Cadence
-                    if self.post_stop_sell_mode: delay = 5 + random.uniform(0, 1)
-                    elif -600 < seconds_to_jump <= 120: delay = 5 + random.uniform(0, 2)
-                    elif seconds_to_jump <= 300: delay = 12 + random.uniform(1, 4)
-                    else: delay = 60 + random.uniform(2, 8)
+                    if url_index % len(pool_urls) == 0:
+                        if self.post_stop_sell_mode: 
+                            delay = 5 + random.uniform(0, 1)
+                        elif -600 < seconds_to_jump <= 120: 
+                            delay = 5 + random.uniform(0, 2)
+                        elif seconds_to_jump <= 300: 
+                            delay = 12 + random.uniform(1, 4)
+                        else: 
+                            delay = 60 + random.uniform(2, 8)
+
+                        await asyncio.sleep(delay)
+                    else:
+                        await asyncio.sleep(1)
 
                     await asyncio.sleep(delay)
 

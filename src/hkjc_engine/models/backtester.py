@@ -12,6 +12,8 @@ Key changes
 3. Bet PnL still settles on FINAL `win_dividend` from `race_dividends`
    (that's what actually pays out), but the EV used to gate the bet uses
    STOP_SELL × median_R, matching live-execution conditions.
+4. (Structural Update) Pace Archetypes and I_valid flags are computed at 
+   inference time to correctly route PyMC stacker regimes and Stratified Isotonic Calibrators.
 """
 from __future__ import annotations
 
@@ -191,6 +193,9 @@ class XGBEnsembleBacktester:
             if df.empty or len(df) < 2:
                 continue
 
+            # Data Quality Indicator for the Stacker
+            df['I_valid'] = (df['stop_sell_odds'].notna() & (df['stop_sell_odds'] != df['win_odds'])).astype(int)
+
             # ---- defensive interaction recompute (parity with original) ----
             df['is_class_drop'] = df['is_class_drop'].astype(float).fillna(0.0)
             df['is_class_rise'] = df['is_class_rise'].astype(float).fillna(0.0)
@@ -206,23 +211,32 @@ class XGBEnsembleBacktester:
             dmat_a.set_base_margin(df['base_margin'])
             df['raw_a'] = self.model_a.predict(dmat_a)
             df['P_a_softmax'] = _softmax(df['raw_a'].values)
+            # Model A utilizes global SmoothedIsotonicCalibrator
             df['P_a_cal'] = self.calibrator_a.predict_proba(df['P_a_softmax'].values)[:, 1]
 
-            # ---- Model B (no base_margin, unchanged) ----
-            dmat_b = xgb.DMatrix(df[self.FEATURES_B])
-            df['raw_b'] = self.model_b.predict(dmat_b)
-            df['P_b_softmax'] = _softmax(df['raw_b'].values)
-            df['P_b_cal'] = self.calibrator_b.predict_proba(df['P_b_softmax'].values)[:, 1]
+            # ---- Model B (CoxPH) ----
+            cox_features = [
+                'relative_early_pace', 'relative_mid_pace', 'relative_finish_pace',
+                'weight_delta', 'draw', 'is_class_drop', 'is_class_rise',
+                'ts_advantage', 'is_maiden', 'track_width', 'straight_length'
+            ]
+            df['raw_b'] = self.model_b.predict_partial_hazard(df[cox_features])
+            df['P_b_softmax'] = df['raw_b'] / df['raw_b'].sum()
+            
+            # Pace Archetype Bucketing for Model B Stratified Isotonic Calibrator
+            bins = [-np.inf, -0.84, -0.25, 0.25, 0.84, np.inf]
+            df['pace_archetype'] = pd.cut(df['relative_early_pace'], bins=bins, labels=[0, 1, 2, 3, 4]).astype(int)
+            df['P_b_cal'] = self.calibrator_b.predict_proba(df['P_b_softmax'].values, strata=df['pace_archetype'].values)[:, 1]
 
             # ---- Public market on STOP_SELL ----
             df['P_pub_raw'] = 1.0 / df['stop_sell_odds']
             df['P_pub'] = df['P_pub_raw'] / df['P_pub_raw'].sum()
 
-            # ---- Stacker ----
+            # ---- Stacker (with Data Quality Context for FLB debiasing) ----
             P = np.column_stack([df['P_a_cal'].values,
                                  df['P_b_cal'].values,
                                  df['P_pub'].values])
-            df['P_model'] = self.stacker.predict(P, df['race_id'].values)
+            df['P_model'] = self.stacker.predict(P, df['race_id'].values, I_valid=df['I_valid'].values)
             df['EV_naive'] = df['P_model'] * df['stop_sell_odds'] - 1.0
 
             # ---- Drift stats: per-horse from forecaster, fallback to static ----
