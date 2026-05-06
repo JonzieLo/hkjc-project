@@ -3,22 +3,15 @@ Model A — XGBoost market-residual learner.
 
 Drift-aware refactor (§1a)
 --------------------------
-The base_margin used to be derived from `race_entries.win_odds`, which is
-the FINAL settled dividend including post-STOP_SELL late money. That
-introduced a look-ahead bias of roughly 0.6%-10% per pool (see
-drift_diagnostic). This trainer now anchors base_margin on the STOP_SELL
-implied probability instead:
-
+The base_margin used to be derived from `race_entries.win_odds`, which is the FINAL settled dividend including post-STOP_SELL late money. 
+That introduced a look-ahead bias of roughly 0.6%-10% per pool (see drift_diagnostic). 
+This trainer now anchors base_margin on the STOP_SELL implied probability instead:
     base_margin = calculate_base_margin(stop_sell_odds)
 
-Pre-Plan-C history is missing from live_odds_history. For those rows we
-fall back to FINAL odds with a uniform multiplicative drift correction
-(R = mean drift ratio per pool from drift_diagnostic). This is biased
-zero in expectation, which is the property the residual learner needs.
+Pre-Plan-C history is missing from live_odds_history. For those rows we fall back to FINAL odds with a uniform multiplicative drift correction (R = mean drift ratio per pool from drift_diagnostic). 
+This is biased zero in expectation, which is the property the residual learner needs.
 
-The OOF export keeps `win_odds` for downstream EV inspection but adds
-`stop_sell_odds` so the stacker / backtester can consistently use the
-point-in-time anchor.
+The OOF export keeps `win_odds` for downstream EV inspection but adds `stop_sell_odds` so the stacker / backtester can consistently use the point-in-time anchor.
 """
 from __future__ import annotations
 
@@ -38,18 +31,13 @@ from hkjc_engine.data.stop_sell_loader import (
     attach_win_anchor,
     coverage_report,
 )
-from hkjc_engine.models.ensemble import BetaCalibrator
+from hkjc_engine.models.ensemble import SmoothedIsotonicCalibrator
 from hkjc_engine.models.feature_factory import (
     HKJCFeatureFactory,
     calculate_base_margin,
 )
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _grouped_softmax(scores: np.ndarray, race_ids: np.ndarray) -> np.ndarray:
     """Softmax within each race group, broadcasting back to the full vector."""
@@ -62,10 +50,6 @@ def _grouped_softmax(scores: np.ndarray, race_ids: np.ndarray) -> np.ndarray:
         out[idx] = e
     return out
 
-
-# ---------------------------------------------------------------------------
-# Trainer
-# ---------------------------------------------------------------------------
 
 class XGBResidualTrainer:
     """Market-residual XGBoost — anchored on STOP_SELL odds for point-in-time
@@ -152,7 +136,7 @@ class XGBResidualTrainer:
         logging.info("Training on %d entries across %d races.",
                      len(df), groups.nunique())
 
-        # CRITICAL CHANGE: base_margin from STOP_SELL anchor, not FINAL
+        # base_margin from STOP_SELL anchor, not FINAL
         df['base_margin'] = (df.groupby('race_id')['stop_sell_odds']
                              .transform(calculate_base_margin))
         base_margin = df['base_margin']
@@ -199,9 +183,7 @@ class XGBResidualTrainer:
         df['raw_score'] = oof_preds
         df['P_model'] = _grouped_softmax(oof_preds, groups.values)
 
-        # Sanity: STOP_SELL public consensus should logloss-beat
-        # FINAL public consensus only marginally. If much worse, something
-        # is wrong with the anchor (probably mis-mapped horse_no).
+        # Sanity: STOP_SELL public consensus should logloss-beat FINAL public consensus only marginally. If much worse, something is wrong with the anchor (probably mis-mapped horse_no).
         df['P_pub_final_raw'] = 1.0 / df['win_odds']
         df['P_pub_final'] = (df['P_pub_final_raw']
                              / df.groupby('race_id')['P_pub_final_raw'].transform('sum'))
@@ -213,11 +195,11 @@ class XGBResidualTrainer:
                      log_loss(y, df['P_pub_stop']))
 
         # Calibrator
-        calibrator = BetaCalibrator().fit(df['P_model'].values, y.values)
+        calibrator = SmoothedIsotonicCalibrator().fit(df['P_model'].values, y.values)
         joblib.dump(calibrator, calibrator_path)
+        
         df['P_cal_raw'] = calibrator.predict(df['P_model'].values)
-        df['P_calibrated'] = (df['P_cal_raw']
-                              / df.groupby('race_id')['P_cal_raw'].transform('sum'))
+        df['P_calibrated'] = (df['P_cal_raw'] / df.groupby('race_id')['P_cal_raw'].transform('sum'))
         logging.info("OOF LogLoss — pre-cal: %.5f | post-cal: %.5f",
                      log_loss(y, df['P_model']),
                      log_loss(y, df['P_calibrated']))
@@ -233,9 +215,7 @@ class XGBResidualTrainer:
         logging.info("Final model saved to %s", save_path)
 
         # Export OOF — INCLUDE stop_sell_odds so the stacker uses it for P_mkt
-        export_df = df[['race_id', 'horse_code', 'horse_no',
-                        'finish_position', 'win_odds',
-                        'stop_sell_odds', 'P_calibrated']].copy()
+        export_df = df[['race_id', 'horse_code', 'horse_no', 'finish_position', 'win_odds', 'stop_sell_odds', 'P_calibrated']].copy()
         export_df.to_csv(oof_csv_path, index=False)
         logging.info("Exported Model A OOF predictions to %s", oof_csv_path)
 

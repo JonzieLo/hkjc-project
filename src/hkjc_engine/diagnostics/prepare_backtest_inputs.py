@@ -2,43 +2,9 @@
 prepare_backtest_inputs.py
 ==========================
 
-Drop-in replacement for src/hkjc_engine/diagnostics/prepare_backtest_inputs.py.
-
-Produces the two CSVs the exotics_backtester consumes:
+Produces the two CSVs the exotics_backtester and rank_calibration_check consume:
     results.csv        race_id, pos1_horse_no, pos2_horse_no, pos3_horse_no
     p_model_close.csv  race_id, horse_no, p_model, win_odds_close
-
-Key change vs. previous version
--------------------------------
-The old version sourced its race universe from the live-archive CSV
-(`claude_exotics_diagnostic.csv`), which only contains races since the
-live odds archiver started running (~9 days as of writing). This made the
-downstream backtester output 9-race tear sheets that could never reach
-statistical significance.
-
-This version sources the race universe from `race_dividends` directly,
-filtered by a date window. Any race for which:
-    - dividends have been scraped
-    - finishing positions are in race_entries
-    - race metadata is in races
-    - the predictor returns a non-empty frame
-is included in the replay.
-
-Usage
------
-    # Default: last 24 months
-    python -m hkjc_engine.diagnostics.prepare_backtest_inputs \\
-        --out_dir ./backtest_inputs
-
-    # Explicit window
-    python -m hkjc_engine.diagnostics.prepare_backtest_inputs \\
-        --start_date 2023-01-01 --end_date 2024-12-31 \\
-        --out_dir ./backtest_inputs
-
-    # Backward-compat: drive race universe off the live-archive CSV
-    python -m hkjc_engine.diagnostics.prepare_backtest_inputs \\
-        --closing_odds claude_exotics_diagnostic.csv \\
-        --out_dir ./backtest_inputs
 """
 from __future__ import annotations
 
@@ -269,7 +235,7 @@ def prepare_inputs(out_dir: str,
             p_rows.append({
                 "race_id": race_id,
                 "horse_no": int(row["horse_no"]),
-                "p_model": float(row["P_model"]),
+                "p_model": float(row["P_model_exo"]), # <--- Multi-Agent Exotics Stacker Used Here
                 "win_odds_close": float(row["live_odds"]),
             })
 
@@ -283,16 +249,6 @@ def prepare_inputs(out_dir: str,
             log.warning("  %s -> %s", rid, reason)
         if len(skipped) > 20:
             log.warning("  ... and %d more", len(skipped) - 20)
-
-    print("\nPrep complete. Run the backtester with:\n")
-    print(f"  python -m hkjc_engine.diagnostics.exotics_backtest \\")
-    print(f"    --closing_source dividends \\")
-    print(f"    --results      {results_path} \\")
-    print(f"    --p_model      {p_model_path} \\")
-    print(f"    --bankroll     100000 \\")
-    print(f"    --shrinkage    0.85 \\")
-    print(f"    --dividend_unit_base 10 \\")
-    print(f"    --out_dir      ./backtest_out\n")
 
 
 if __name__ == "__main__":

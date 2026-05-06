@@ -39,6 +39,7 @@ ENV/
 # ============ Generated data / logs ============
 *.csv
 *.log
+*.txt
 pack_for_ai.py
 hkjc_project_prod.txt
 drift_diagnostic_out/
@@ -54,6 +55,9 @@ model_a_oof_predictions.csv
 model_b_oof_predictions.csv
 live_config.json
 scrape_horse_no.log
+stern_backtest_out/
+calibration_out_v2/
+pace_copula.npy
 
 # ============ Data dumps ============
 *.sql.gz

@@ -1,329 +1,208 @@
-"""
-Beta calibrator + Benter log-linear stacker.
-
-Drift-aware refactor (§1b)
---------------------------
-The optimiser for the third (market) column previously used
-`P_mkt = 1 / win_odds`, normalised. That FINAL-odds anchor included
-late-money information the live engine cannot see at execution. The
-stacker would fit `P_mkt` an inflated weight that does not generalise to
-live conditions.
-
-Now `EnsembleOptimizer` reads `stop_sell_odds` from the OOF CSV (exported
-by trainer_residual.py and trainer_independent.py) and uses
-`1 / stop_sell_odds` as the public-consensus probability. If the column
-is absent — e.g. running this on legacy OOF outputs — we fall back to
-`win_odds` with a warning so the user is aware the fit is biased.
-
-Other changes
--------------
-* `BetaCalibrator` and `BenterLogLinearStacker` are unchanged.
-* The grouped-softmax helper (`GroupedSoftmaxObjective`) is unchanged.
-* The optimiser reports BOTH the FINAL-anchored and STOP_SELL-anchored
-  baseline log-losses so the user can see how much "edge" was being
-  attributed to look-ahead bias.
-"""
-from __future__ import annotations
-
 import logging
-
 import joblib
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from sklearn.linear_model import LogisticRegression
+import pymc as pm
+import pytensor.tensor as pt
 from sklearn.metrics import log_loss
+from sklearn.isotonic import IsotonicRegression
+from scipy.interpolate import PchipInterpolator
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-
-# ---------------------------------------------------------------------------
-# BetaCalibrator (unchanged)
-# ---------------------------------------------------------------------------
-
-class BetaCalibrator:
-    def __init__(self, enforce_monotone=True, C=1e10):
-        self.enforce_monotone = enforce_monotone
-        self.C = C
-        self.lr_ = None
-        self.mode_ = 'full'
-
-    def _clip(self, s):
-        return np.clip(np.asarray(s, dtype=float).ravel(), 1e-12, 1 - 1e-12)
-
-    def _features_full(self, s):
-        s = self._clip(s)
-        return np.column_stack([np.log(s), -np.log(1.0 - s)])
-
-    def _features_a_only(self, s):
-        s = self._clip(s)
-        return np.log(s).reshape(-1, 1)
-
-    def _features_b_only(self, s):
-        s = self._clip(s)
-        return -np.log(1.0 - s).reshape(-1, 1)
+class SmoothedIsotonicCalibrator:
+    def __init__(self):
+        self.ir = IsotonicRegression(y_min=1e-6, y_max=1-1e-6, out_of_bounds='clip')
+        self.spline = None
+        self.min_val = 1e-6
+        self.max_val = 1 - 1e-6
 
     def fit(self, scores, y):
-        X = self._features_full(scores)
-        self.lr_ = LogisticRegression(C=self.C, solver='lbfgs', fit_intercept=True)
-        self.lr_.fit(X, np.asarray(y).ravel())
-        if self.enforce_monotone:
-            a, b = self.lr_.coef_[0]
-            if a < 0 and b < 0:
-                self.lr_ = LogisticRegression(C=self.C, solver='lbfgs', fit_intercept=True)
-                self.lr_.fit(np.zeros((len(scores), 1)), y)
-                self.mode_ = 'intercept_only'
-            elif a < 0:
-                self.lr_ = LogisticRegression(C=self.C, solver='lbfgs', fit_intercept=True)
-                self.lr_.fit(self._features_b_only(scores), y)
-                self.mode_ = 'b_only'
-            elif b < 0:
-                self.lr_ = LogisticRegression(C=self.C, solver='lbfgs', fit_intercept=True)
-                self.lr_.fit(self._features_a_only(scores), y)
-                self.mode_ = 'a_only'
+        scores = np.asarray(scores, dtype=float).ravel()
+        y = np.asarray(y, dtype=float).ravel()
+        self.ir.fit(scores, y)
+        x_unique = np.unique(scores)
+        y_iso = self.ir.predict(x_unique)
+        if len(x_unique) > 3:
+            self.spline = PchipInterpolator(x_unique, y_iso)
+        else:
+            self.spline = None
         return self
 
-    def _design(self, scores):
-        if self.mode_ == 'full':   return self._features_full(scores)
-        if self.mode_ == 'a_only': return self._features_a_only(scores)
-        if self.mode_ == 'b_only': return self._features_b_only(scores)
-        return np.zeros((len(self._clip(scores)), 1))
-
     def predict(self, scores):
-        return self.lr_.predict_proba(self._design(scores))[:, 1]
+        scores = np.asarray(scores, dtype=float).ravel()
+        if self.spline is not None:
+            p = self.spline(scores)
+        else:
+            p = self.ir.predict(scores)
+        return np.clip(p, self.min_val, self.max_val)
 
     def predict_proba(self, scores):
         p = self.predict(scores)
         return np.column_stack([1 - p, p])
 
 
-# ---------------------------------------------------------------------------
-# Grouped softmax loss (unchanged)
-# ---------------------------------------------------------------------------
+class StratifiedSmoothedIsotonicCalibrator:
+    def __init__(self):
+        self.calibrators = {}
+        self.global_calibrator = SmoothedIsotonicCalibrator()
 
-class GroupedSoftmaxObjective:
-    def __init__(self, group_sizes):
-        self.group_sizes = np.asarray(group_sizes, dtype=np.int64)
-        self.boundaries  = np.concatenate(([0], np.cumsum(self.group_sizes)))
-
-    def __call__(self, predt, dtrain):
-        y = dtrain.get_label()
-        grad = np.empty_like(predt, dtype=np.float64)
-        hess = np.empty_like(predt, dtype=np.float64)
-        for k in range(len(self.group_sizes)):
-            lo, hi = self.boundaries[k], self.boundaries[k + 1]
-            s = predt[lo:hi].astype(np.float64); s -= s.max()
-            e = np.exp(s); p = e / e.sum()
-            grad[lo:hi] = p - y[lo:hi]
-            hess[lo:hi] = np.maximum(p * (1.0 - p), 1e-6)
-        return grad, hess
-
-
-def grouped_logloss_eval(group_sizes):
-    boundaries = np.concatenate(([0], np.cumsum(group_sizes)))
-    def _feval(predt, dtrain):
-        y = dtrain.get_label()
-        total, n = 0.0, len(group_sizes)
-        for k in range(n):
-            lo, hi = boundaries[k], boundaries[k + 1]
-            s = predt[lo:hi] - predt[lo:hi].max()
-            p = np.exp(s); p /= p.sum()
-            w = int(np.argmax(y[lo:hi]))
-            total += -np.log(max(p[w], 1e-15))
-        return 'race_logloss', total / max(n, 1)
-    return _feval
-
-
-# ---------------------------------------------------------------------------
-# Benter log-linear stacker (unchanged interface)
-# ---------------------------------------------------------------------------
-
-class BenterLogLinearStacker:
-    def __init__(self, bounds=(0.0, 3.0), model_names=None):
-        self.bounds = bounds
-        self.model_names = model_names
-        self.weights = None
-        self.loss_ = None
-
-    def _normalize_per_race(self, logp, race_ids):
-        s = pd.Series(logp, index=race_ids)
-        s = s - s.groupby(level=0).transform('max')
-        e = np.exp(s.values)
-        df = pd.DataFrame({'e': e, 'rid': race_ids})
-        df['z'] = df.groupby('rid')['e'].transform('sum')
-        return (df['e'] / df['z']).values
-
-    def _prepare(self, P):
-        return np.clip(np.asarray(P, dtype=float), 1e-12, 1 - 1e-12)
-
-    def fit(self, P, race_ids, y, x0=None, verbose=False):
-        P = self._prepare(P)
-        logP = np.log(P)
-        race_ids = np.asarray(race_ids)
-        K = P.shape[1]
-        self.baseline_losses_ = [log_loss(y, P[:, k]) for k in range(K)]
-
-        def nll(w):
-            ens_log = logP @ w
-            p_ens = self._normalize_per_race(ens_log, race_ids)
-            p_ens = np.clip(p_ens, 1e-15, 1 - 1e-15)
-            return log_loss(y, p_ens)
-
-        x0 = np.ones(K) if x0 is None else np.asarray(x0, dtype=float)
-        res = minimize(nll, x0, method='L-BFGS-B',
-                       bounds=[self.bounds] * K,
-                       options={'maxiter': 500, 'ftol': 1e-10})
-        self.weights = res.x
-        self.loss_ = float(res.fun)
-
-        if verbose:
-            names = self.model_names or [f"M{k}" for k in range(K)]
-            logging.info("\n--- Benter Log-Linear Stacker ---")
-            for name, base, w in zip(names, self.baseline_losses_, self.weights):
-                logging.info("%-10s | standalone LL = %.5f | weight = %+.4f",
-                             name, base, w)
-            logging.info("Ensemble LogLoss       = %.5f", self.loss_)
+    def fit(self, scores, strata, y):
+        scores = np.asarray(scores, dtype=float).ravel()
+        strata = np.asarray(strata).ravel()
+        y = np.asarray(y, dtype=float).ravel()
+        self.global_calibrator.fit(scores, y)
+        for s in np.unique(strata):
+            mask = (strata == s)
+            if mask.sum() > 50:
+                calib = SmoothedIsotonicCalibrator()
+                calib.fit(scores[mask], y[mask])
+                self.calibrators[s] = calib
         return self
 
-    def predict(self, P, race_ids):
-        P = self._prepare(P)
-        return self._normalize_per_race(np.log(P) @ self.weights,
-                                        np.asarray(race_ids))
+    def predict(self, scores, strata=None):
+        scores = np.asarray(scores, dtype=float).ravel()
+        if strata is None:
+            return self.global_calibrator.predict(scores)
+        strata = np.asarray(strata).ravel()
+        p = np.zeros_like(scores, dtype=float)
+        for s in np.unique(strata):
+            mask = (strata == s)
+            if s in self.calibrators:
+                p[mask] = self.calibrators[s].predict(scores[mask])
+            else:
+                p[mask] = self.global_calibrator.predict(scores[mask])
+        return p
+
+    def predict_proba(self, scores, strata=None):
+        p = self.predict(scores, strata)
+        return np.column_stack([1 - p, p])
 
 
-# ---------------------------------------------------------------------------
-# EnsembleOptimizer — STOP_SELL-aware
-# ---------------------------------------------------------------------------
+class BayesianHierarchicalStacker:
+    def __init__(self, mode='exotics'):
+        self.weights = None
+        self.loss_ = None
+        self.mode = mode
+        
+    def fit(self, P, race_ids, y, I_valid, verbose=True):
+        logP = np.log(np.clip(P, 1e-12, 1 - 1e-12))
+        race_idx, unique_races = pd.factorize(race_ids)
+        
+        with pm.Model() as model:
+            w_A = pm.HalfNormal("w_A", sigma=1.0)
+            w_B = pm.HalfNormal("w_B", sigma=1.0)
+            
+            # Use two global scalar parameters instead of 3,400+ race-specific parameters
+            if self.mode == 'win':
+                w_mkt_live = pm.TruncatedNormal("w_mkt_live", mu=0.05, sigma=0.05, lower=0.0, upper=0.15)
+                w_mkt_fallback = pm.TruncatedNormal("w_mkt_fallback", mu=0.05, sigma=0.05, lower=0.0, upper=0.15)
+            else:
+                w_mkt_live = pm.TruncatedNormal("w_mkt_live", mu=0.85, sigma=0.5, lower=0.0, upper=2.0)
+                w_mkt_fallback = pm.TruncatedNormal("w_mkt_fallback", mu=0.05, sigma=0.05, lower=0.0, upper=0.5)
+            
+            w_mkt_expanded = pt.where(I_valid == 1, w_mkt_live, w_mkt_fallback)
+            
+            logits = w_A * logP[:, 0] + w_B * logP[:, 1] + w_mkt_expanded * logP[:, 2]
+            
+            logits_clipped = pt.clip(logits, -50, 20)
+            exp_logits = pt.exp(logits_clipped)
+            
+            # Add small epsilon to prevent NaN division on heavy underflows
+            sum_exp = pt.bincount(race_idx, weights=exp_logits) + 1e-12
+            
+            P_ens = exp_logits / sum_exp[race_idx]
+            y_obs = pm.Bernoulli("y_obs", p=P_ens, observed=y)
+            
+            logging.info(f"Fitting Bayesian Stacker ({self.mode.upper()}) via ADVI...")
+            # progressbar=False hides the repetitive noisy ADVI progress bars
+            mean_field = pm.fit(n=30000, method='advi', obj_optimizer=pm.adam(learning_rate=0.01), progressbar=False)
+            trace = mean_field.sample(1000)
+            
+        self.weights = np.array([
+            trace.posterior['w_A'].mean().item(),
+            trace.posterior['w_B'].mean().item(),
+            trace.posterior['w_mkt_live'].mean().item(),
+            trace.posterior['w_mkt_fallback'].mean().item()
+        ])
+        
+        P_ens_final = self.predict(P, race_ids, I_valid)
+        self.loss_ = log_loss(y, P_ens_final)
+        
+        if verbose:
+            logging.info(f"\n--- Stacker Weights ({self.mode.upper()}) ---")
+            logging.info(f"w_A (Residual)       : {self.weights[0]:.4f}")
+            logging.info(f"w_B (Physics/Cox)    : {self.weights[1]:.4f}")
+            logging.info(f"w_mkt (Live-Tick)    : {self.weights[2]:.4f}")
+            logging.info(f"w_mkt (Fallback)     : {self.weights[3]:.4f}")
+            logging.info(f"Ensemble LogLoss     : {self.loss_:.5f}")
+            
+        return self
+
+    def predict(self, P, race_ids, I_valid=None):
+        logP = np.log(np.clip(P, 1e-12, 1 - 1e-12))
+        
+        if I_valid is not None:
+            w_mkt_arr = np.where(I_valid == 1, self.weights[2], self.weights[3])
+        else:
+            w_mkt_arr = self.weights[2]
+            
+        logits = self.weights[0] * logP[:, 0] + self.weights[1] * logP[:, 1] + w_mkt_arr * logP[:, 2]
+        
+        s = pd.Series(logits, index=race_ids)
+        s = s - s.groupby(level=0).transform('max')
+        e = np.exp(s.values)
+        
+        df = pd.DataFrame({'e': e, 'rid': race_ids})
+        df['z'] = df.groupby('rid')['e'].transform('sum')
+        P_ens = df['e'] / df['z']
+        P_ens = np.clip(P_ens, 1e-9, 1.0)
+        return (P_ens / P_ens.groupby(df['rid']).transform('sum')).values
+
 
 class EnsembleOptimizer:
-    """Fits the Benter log-linear stacker on STOP_SELL-anchored P_mkt.
-
-    Parameters
-    ----------
-    market_anchor : 'stop_sell' | 'final'
-        Which odds column to use for the public-consensus column. Defaults
-        to 'stop_sell' (point-in-time correct). 'final' is provided only
-        for backwards-compatible diagnostics.
-    """
-
-    def __init__(self,
-                 model_a_csv: str = 'model_a_oof_predictions.csv',
-                 model_b_csv: str = 'model_b_oof_predictions.csv',
-                 include_market: bool = True,
-                 weight_bounds: tuple = (0.0, 3.0),
-                 market_anchor: str = 'stop_sell'):
+    def __init__(self, model_a_csv, model_b_csv, include_market=True, market_anchor='stop_sell', mode='exotics'):
         self.df_a = pd.read_csv(model_a_csv)
         self.df_b = pd.read_csv(model_b_csv)
         self.include_market = include_market
-        self.weight_bounds = weight_bounds
         self.market_anchor = market_anchor
+        self.mode = mode
 
-    def _resolve_anchor_column(self, df: pd.DataFrame) -> str:
-        if self.market_anchor == 'stop_sell':
-            if 'stop_sell_odds' not in df.columns:
-                logging.warning(
-                    "stop_sell_odds missing from OOF CSVs — falling back to "
-                    "win_odds (FINAL). Re-train with the refactored "
-                    "trainer_residual / trainer_independent to remove "
-                    "look-ahead bias from P_mkt.")
-                return 'win_odds'
-            return 'stop_sell_odds'
-        return 'win_odds'
-
-    def _merge_oof(self) -> pd.DataFrame:
-        a = self.df_a.rename(columns={'P_calibrated': 'P_A'})
-        b = self.df_b.rename(columns={'P_calibrated': 'P_B'})
-
-        # Prefer stop_sell_odds from EITHER side; if both present, A wins.
-        keep_a = ['race_id', 'horse_code', 'finish_position', 'P_A', 'win_odds']
-        if 'stop_sell_odds' in a.columns:
-            keep_a.append('stop_sell_odds')
-        keep_b = ['race_id', 'horse_code', 'P_B']
-        if 'stop_sell_odds' in b.columns and 'stop_sell_odds' not in keep_a:
-            keep_b.append('stop_sell_odds')
-
-        df = pd.merge(a[keep_a], b[keep_b],
-                      on=['race_id', 'horse_code'], how='inner')
-        df = df.dropna(subset=['P_A', 'P_B', 'finish_position', 'win_odds'])
-        df['is_winner'] = (df['finish_position'] == 1).astype(int)
-
-        anchor_col = self._resolve_anchor_column(df)
-        logging.info("Stacker market anchor: %s", anchor_col)
-
-        # Build P_mkt from chosen anchor; also compute the FINAL anchor
-        # for diagnostic comparison.
-        df['P_mkt_raw'] = 1.0 / df[anchor_col]
-        df['P_mkt'] = (df['P_mkt_raw']
-                       / df.groupby('race_id')['P_mkt_raw'].transform('sum'))
-
-        df['P_mkt_final_raw'] = 1.0 / df['win_odds']
-        df['P_mkt_final'] = (df['P_mkt_final_raw']
-                             / df.groupby('race_id')['P_mkt_final_raw'].transform('sum'))
-
-        # Drop races without exactly one winner (leakage guard).
-        winners_per_race = df.groupby('race_id')['is_winner'].sum()
-        good_races = winners_per_race[winners_per_race == 1].index
-        dropped = df['race_id'].nunique() - len(good_races)
-        if dropped > 0:
-            logging.info("Dropping %d races with !=1 winner.", dropped)
-        df = df[df['race_id'].isin(good_races)].reset_index(drop=True)
-
-        for col in ('P_A', 'P_B', 'P_mkt', 'P_mkt_final'):
-            df[col] = df[col] / df.groupby('race_id')[col].transform('sum')
-        return df
-
-    def fit_stacker(self) -> BenterLogLinearStacker:
-        logging.info("Merging Model A and Model B OOF predictions...")
-        df = self._merge_oof()
-        logging.info("Aligned %d runs across %d races.",
-                     len(df), df['race_id'].nunique())
-
-        loss_a   = log_loss(df['is_winner'], df['P_A'])
-        loss_b   = log_loss(df['is_winner'], df['P_B'])
-        loss_mkt = log_loss(df['is_winner'], df['P_mkt'])
-        loss_mkt_final = log_loss(df['is_winner'], df['P_mkt_final'])
-        gap_diag = loss_mkt - loss_mkt_final
-        logging.info("\n--- Baseline LogLoss ---")
-        logging.info("Public (FINAL)       : %.5f   <-- look-ahead biased", loss_mkt_final)
-        logging.info("Public (STOP_SELL)   : %.5f   <-- point-in-time correct", loss_mkt)
-        logging.info("FINAL - STOP_SELL gap: %+.5f   <-- size of late-money signal", -gap_diag)
-        logging.info("Model A (Residual)   : %.5f", loss_a)
-        logging.info("Model B (Physics)    : %.5f", loss_b)
-
-        if self.include_market:
-            cols  = ['P_A', 'P_B', 'P_mkt']
-            names = ['P_A', 'P_B', 'P_mkt_stop_sell']
+    def fit_stacker(self):
+        logging.info(f"Merging Model A and Model B OOF predictions for {self.mode.upper()}...")
+        df = pd.merge(self.df_a, self.df_b, on=['race_id', 'horse_code'])
+        
+        # Safely resolve column names handling Pandas _x/_y suffix collision logic
+        win_odds_col = 'win_odds_x' if 'win_odds_x' in df.columns else 'win_odds'
+        fp_col = 'finish_position_x' if 'finish_position_x' in df.columns else 'finish_position'
+        
+        if 'stop_sell_odds' in df.columns:
+            df['I_valid'] = (df['stop_sell_odds'].notna() & (df['stop_sell_odds'] != df[win_odds_col])).astype(int)
+        elif 'stop_sell_pla_odds' in df.columns:
+            df['I_valid'] = 1 # We matched rows with synthetic/live PLA odds
         else:
-            cols  = ['P_A', 'P_B']
-            names = ['P_A', 'P_B']
-
-        P = df[cols].values
-        stacker = BenterLogLinearStacker(
-            bounds=self.weight_bounds, model_names=names,
-        ).fit(P=P, race_ids=df['race_id'].values,
-              y=df['is_winner'].values, verbose=True)
-
-        best_single = (min(loss_a, loss_b, loss_mkt) if self.include_market
-                       else min(loss_a, loss_b))
-        if stacker.loss_ < best_single:
-            logging.info("SUCCESS: ensemble beats best standalone by %.5f.",
-                         best_single - stacker.loss_)
+            df['I_valid'] = 0
+            
+        if self.mode == 'pla':
+            target_odds = 'stop_sell_pla_odds' if 'stop_sell_pla_odds' in df.columns else win_odds_col
         else:
-            logging.warning("Ensemble did NOT beat best standalone. "
-                            "Check anchor column / merge keys.")
-        return stacker
-
-
-if __name__ == "__main__":
-    try:
-        opt = EnsembleOptimizer(
-            'model_a_oof_predictions.csv',
-            'model_b_oof_predictions.csv',
-            include_market=True,
-            market_anchor='stop_sell',
+            target_odds = 'stop_sell_odds' if 'stop_sell_odds' in df.columns else win_odds_col
+            
+        # Fallback handling for target_odds missing/zeroes
+        df['P_mkt_raw'] = 1.0 / np.maximum(df[target_odds].fillna(1.0).astype(float), 1.0)
+        df['P_mkt'] = df['P_mkt_raw'] / df.groupby('race_id')['P_mkt_raw'].transform('sum')
+        
+        # Clean dataframe from missing calibration scores or targets
+        df = df.dropna(subset=['P_calibrated_x', 'P_calibrated_y', 'P_mkt', fp_col])
+        
+        P = df[['P_calibrated_x', 'P_calibrated_y', 'P_mkt']].values
+        
+        if self.mode == 'pla' and 'is_placed' in df.columns:
+            y = df['is_placed'].astype(int).values
+        else:
+            y = (df[fp_col] == 1).astype(int).values
+        
+        stacker = BayesianHierarchicalStacker(mode=self.mode).fit(
+            P=P, race_ids=df['race_id'].values, y=y, I_valid=df['I_valid'].values
         )
-        stacker = opt.fit_stacker()
-        joblib.dump(stacker, 'ensemble_stacker.pkl')
-        logging.info("Stacker saved to ensemble_stacker.pkl")
-    except FileNotFoundError:
-        logging.error("OOF CSVs not found. Run both trainers first.")
+        return stacker

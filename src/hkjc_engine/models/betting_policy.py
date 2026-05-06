@@ -120,6 +120,84 @@ def shrink_probability(p_raw: float, shrinkage: float) -> float:
     return float(min(shrinkage * p_raw, 1.0 - 1e-9))
 
 
+# ---------------------------------------------------------------------------
+# Stratified shrinkage by P_pub band
+# ---------------------------------------------------------------------------
+#
+# Background: a single global shrinkage scalar is fit from all OOF rows
+# pooled together, which means the favourite-rich middle bins dominate the
+# estimate and the longshot tail is under-corrected. theta_place_diagnostic
+# revealed that P_ens is systematically overconfident on longshots
+# (model-side θ=0.76 vs pub-side θ=0.83 on HKJC 2018-2026), and this
+# inflates EV across PLA and all exotic pools that consume P_ens.
+#
+# Stratified shrinkage fixes the input rather than each downstream
+# projection: shrinkage is fit separately within each P_pub band, so the
+# longshot bin gets a more aggressive correction without compressing the
+# mid-range where the model is already calibrated. Once P_ens is band-
+# calibrated, the existing Henery projections work without further
+# per-pool patches.
+#
+# Band edges chosen to match place_projection_diagnostic bins for direct
+# comparability and to give roughly balanced sample sizes on HKJC field
+# distributions. The deepest-longshot band (<0.03) is where the model's
+# bias is largest; the favourite band (>0.30) typically has the fewest
+# horses but can also be over-confident.
+
+STRATIFIED_SHRINKAGE_BANDS = (0.0, 0.03, 0.07, 0.15, 0.30, 1.01)
+STRATIFIED_SHRINKAGE_NAMES = ('<0.03', '0.03-0.07', '0.07-0.15',
+                              '0.15-0.30', '>0.30')
+
+
+def _band_of(p_pub: float) -> str:
+    """Return the band name a single p_pub belongs to."""
+    for i, hi in enumerate(STRATIFIED_SHRINKAGE_BANDS[1:]):
+        if p_pub < hi:
+            return STRATIFIED_SHRINKAGE_NAMES[i]
+    return STRATIFIED_SHRINKAGE_NAMES[-1]
+
+
+def lookup_shrinkage(p_pub, shrinkage):
+    """Resolve effective shrinkage for one or many horses.
+
+    Backwards-compatible: if `shrinkage` is a float, returns it unchanged
+    (uniform shrinkage, legacy behaviour). If it's a dict mapping band
+    name to scalar, returns the band-specific value(s).
+
+    Parameters
+    ----------
+    p_pub : float | np.ndarray
+        Public win-pool implied probability for the horse(s).
+    shrinkage : float | dict[str, float]
+        Either a single scalar (legacy) or a dict mapping
+        STRATIFIED_SHRINKAGE_NAMES band names to per-band scalars.
+
+    Returns
+    -------
+    Same type as p_pub: scalar in, scalar out; array in, array out.
+    Missing bands fall back to a global default of 0.85 for safety,
+    so a partially-populated dict still works.
+    """
+    if isinstance(shrinkage, (int, float)):
+        if isinstance(p_pub, np.ndarray):
+            return np.full_like(p_pub, float(shrinkage), dtype=float)
+        return float(shrinkage)
+
+    if not isinstance(shrinkage, dict):
+        raise TypeError(f"shrinkage must be float or dict, got {type(shrinkage)}")
+
+    edges = STRATIFIED_SHRINKAGE_BANDS
+    names = STRATIFIED_SHRINKAGE_NAMES
+    default = 0.85
+
+    if isinstance(p_pub, np.ndarray):
+        # Vectorised: digitize -> band index -> band name -> shrinkage
+        idx = np.clip(np.digitize(p_pub, edges[1:-1]), 0, len(names) - 1)
+        return np.array([float(shrinkage.get(names[i], default))
+                         for i in idx], dtype=float)
+    return float(shrinkage.get(_band_of(float(p_pub)), default))
+
+
 def shrunk_ev(p_raw: float,
               odds: float,
               shrinkage: float,
