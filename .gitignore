@@ -54,6 +54,9 @@ model_a_oof_predictions.csv
 model_b_oof_predictions.csv
 live_config.json
 scrape_horse_no.log
+stern_backtest_out/
+calibration_out_v2/
+mock_live_tape.py
 
 # ============ Data dumps ============
 *.sql.gz
