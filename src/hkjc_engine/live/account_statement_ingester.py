@@ -26,7 +26,7 @@ import argparse
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Iterator
 
 from sqlalchemy import create_engine, text
@@ -136,7 +136,7 @@ def _parse_block_header(lines: list[str]):
     if not dt:
         return None
     dd, mm, yyyy, hh, mn, tail = dt.groups()
-    ts = datetime(int(yyyy), int(mm), int(dd), int(hh), int(mn))
+    ts = datetime(int(yyyy), int(mm), int(dd), int(hh), int(mn), tzinfo=timezone(timedelta(hours=8)))
     i += 1
 
     # Look ahead for venue line. Skip blank lines.

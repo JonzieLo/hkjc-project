@@ -126,7 +126,9 @@ class BayesianHierarchicalStacker:
             trace.posterior['w_mkt_fallback'].mean().item()
         ])
         
-        P_ens_final = self.predict(P, race_ids, I_valid)
+        P_4col = np.column_stack([P, I_valid])
+        P_ens_final = self.predict(P_4col, race_ids)
+        
         self.loss_ = log_loss(y, P_ens_final)
         
         if verbose:
@@ -139,15 +141,31 @@ class BayesianHierarchicalStacker:
             
         return self
 
-    def predict(self, P, race_ids, I_valid=None):
-        logP = np.log(np.clip(P, 1e-12, 1 - 1e-12))
-        
-        if I_valid is not None:
-            w_mkt_arr = np.where(I_valid == 1, self.weights[2], self.weights[3])
+    def predict(self, P, race_ids):
+        # 1. Separate probabilities from the validity indicator
+        if P.shape[1] == 4:
+            I_valid = P[:, 3]
+            P_probs = P[:, :3]
         else:
-            w_mkt_arr = self.weights[2]
+            # Fallback for live inference (run_bot.py) which only passes 3 columns
+            I_valid = np.ones(len(P))
+            P_probs = P
             
-        logits = self.weights[0] * logP[:, 0] + self.weights[1] * logP[:, 1] + w_mkt_arr * logP[:, 2]
+        logP = np.log(np.clip(P_probs, 1e-12, 1 - 1e-12))
+        
+        w_A = self.weights[0]
+        w_B = self.weights[1]
+        
+        # 2. Dynamically assign market weight based on I_valid
+        if len(self.weights) == 4:
+            w_mkt_live = self.weights[2]
+            w_mkt_fallback = self.weights[3]
+            w_mkt = np.where(I_valid == 1, w_mkt_live, w_mkt_fallback)
+        else:
+            w_mkt = self.weights[2]
+            
+        # Vectorized Log-Linear Combination
+        logits = logP[:, 0] * w_A + logP[:, 1] * w_B + logP[:, 2] * w_mkt
         
         s = pd.Series(logits, index=race_ids)
         s = s - s.groupby(level=0).transform('max')
@@ -155,9 +173,7 @@ class BayesianHierarchicalStacker:
         
         df = pd.DataFrame({'e': e, 'rid': race_ids})
         df['z'] = df.groupby('rid')['e'].transform('sum')
-        P_ens = df['e'] / df['z']
-        P_ens = np.clip(P_ens, 1e-9, 1.0)
-        return (P_ens / P_ens.groupby(df['rid']).transform('sum')).values
+        return (df['e'] / df['z']).values
 
 
 class EnsembleOptimizer:

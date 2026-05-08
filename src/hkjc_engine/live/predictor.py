@@ -173,5 +173,5 @@ class LiveRacePredictor:
         df['P_model'] = df['P_model_win']
         df['EV'] = df['P_model'] * df['live_odds'] - 1.0
 
-        keep_cols = ['horse_no', 'horse_code', 'jockey', 'draw', 'actual_weight', 'live_odds', 'live_pla_odds', 'P_model_win', 'P_model_pla', 'P_model_exo', 'EV']
+        keep_cols = ['horse_no', 'horse_code', 'jockey', 'draw', 'actual_weight', 'live_odds', 'live_pla_odds', 'relative_early_pace', 'P_model_win', 'P_model_pla', 'P_model_exo', 'EV']
         return df[[c for c in keep_cols if c in df.columns]].reset_index(drop=True)

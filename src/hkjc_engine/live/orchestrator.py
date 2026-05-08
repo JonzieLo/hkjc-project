@@ -4,7 +4,8 @@ import sys
 from hkjc_engine.config import LIVE_VENUE
 
 
-TOTAL_RACES = 11 if LIVE_VENUE == 'ST' else 9
+# TOTAL_RACES = 11 if LIVE_VENUE == 'ST' else 9
+TOTAL_RACES = 9
 VENUE = LIVE_VENUE
 
 

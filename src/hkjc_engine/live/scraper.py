@@ -481,8 +481,6 @@ class HKJCLiveScraper:
                     else:
                         await asyncio.sleep(1)
 
-                    await asyncio.sleep(delay)
-
             finally:
                 await browser.close()
 

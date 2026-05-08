@@ -417,14 +417,16 @@ class MultiPoolBacktester(XGBEnsembleBacktester):
             # ---- Route to Stackers ----
             race_ids = df['race_id'].values
             
-            P_win = np.column_stack([p_a_win_cal, p_b_cal, p_pub])
-            df['P_model_win'] = self.stacker_win.predict(P_win, race_ids, I_valid=df['I_valid'].values)
+            # Stack the 4th column (I_valid) directly into the matrices
+            P_win = np.column_stack([p_a_win_cal, p_b_cal, p_pub, df['I_valid'].values])
+            df['P_model_win'] = self.stacker_win.predict(P_win, race_ids)
             df['P_model'] = df['P_model_win'] # Assignment for any legacy inherited functions (e.g. diagnostics)
             
-            P_pla = np.column_stack([p_a_pla_cal, p_b_cal, p_mkt_pla])
-            df['P_model_pla'] = self.stacker_pla.predict(P_pla, race_ids, I_valid=df['I_valid'].values)
+            P_pla = np.column_stack([p_a_pla_cal, p_b_cal, p_mkt_pla, df['I_valid'].values])
+            df['P_model_pla'] = self.stacker_pla.predict(P_pla, race_ids)
             
-            df['P_model_exo'] = self.stacker_exo.predict(P_win, race_ids, I_valid=df['I_valid'].values)
+            # Exotics stacker evaluates the WIN matrix inputs using the EXOTICS weights
+            df['P_model_exo'] = self.stacker_exo.predict(P_win, race_ids)
 
             p_arr_win = df['P_model_win'].to_numpy(dtype=float)
             p_arr_pla = df['P_model_pla'].to_numpy(dtype=float)
