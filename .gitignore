@@ -58,10 +58,14 @@ scrape_horse_no.log
 stern_backtest_out/
 calibration_out_v2/
 pace_copula.npy
+run_for_claude.py
+rebuild_tape.py
+mock_live_tape.py
 
 # ============ Data dumps ============
 *.sql.gz
 *.dump
+*.npy
 statements/
 contextual_thetas.json
 

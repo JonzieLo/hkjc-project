@@ -27,7 +27,8 @@ def _refit_dynamic_shrinkage(df_oof: pd.DataFrame, stacker, tail_odds_col: str =
         tail_odds_col = 'win_odds_x'
     df['P_pub_raw'] = 1.0 / df[tail_odds_col]
     df['P_pub'] = (df['P_pub_raw'] / df.groupby('race_id')['P_pub_raw'].transform('sum'))
-    P_mat = np.column_stack([df['P_calibrated_x'].values, df['P_calibrated_y'].values, df['P_pub'].values])
+    df['I_valid'] = (df['stop_sell_odds'].notna() & (df['stop_sell_odds'] != df['win_odds_x'])).astype(int)
+    P_mat = np.column_stack([df['P_calibrated_x'].values, df['P_calibrated_y'].values, df['P_pub'].values, df['I_valid'].values])
     df['P_ens'] = stacker.predict(P_mat, df['race_id'].values)
     tail = df[(df['P_ens'] * df[tail_odds_col] - 1.0 > 0) & (df[tail_odds_col] <= max_odds)]
     if len(tail) <= 10: return default
@@ -43,7 +44,8 @@ def _refit_stratified_shrinkage(df_oof: pd.DataFrame, stacker, tail_odds_col: st
         tail_odds_col = 'win_odds_x'
     df['P_pub_raw'] = 1.0 / df[tail_odds_col]
     df['P_pub'] = (df['P_pub_raw'] / df.groupby('race_id')['P_pub_raw'].transform('sum'))
-    P_mat = np.column_stack([df['P_calibrated_x'].values, df['P_calibrated_y'].values, df['P_pub'].values])
+    df['I_valid'] = (df['stop_sell_odds'].notna() & (df['stop_sell_odds'] != df['win_odds_x'])).astype(int)
+    P_mat = np.column_stack([df['P_calibrated_x'].values, df['P_calibrated_y'].values, df['P_pub'].values, df['I_valid'].values])
     df['P_ens'] = stacker.predict(P_mat, df['race_id'].values)
     edges = STRATIFIED_SHRINKAGE_BANDS
     names = STRATIFIED_SHRINKAGE_NAMES
@@ -182,21 +184,22 @@ def run_walk_forward_validation(train_start: str = '2018-01-01',
         theta_2 = theta_3 = None
         if not df_oof.empty:
             try:
-                P_mat = np.column_stack([df_oof['P_calibrated_x'].values, df_oof['P_calibrated_y'].values, (1.0 / df_oof['stop_sell_odds']).values])
+                # REPLACE THE P_mat DEFINITION HERE:
+                df_oof['I_valid'] = (df_oof['stop_sell_odds'].notna() & (df_oof['stop_sell_odds'] != df_oof['win_odds_x'])).astype(int)
+                P_mat = np.column_stack([
+                    df_oof['P_calibrated_x'].values, 
+                    df_oof['P_calibrated_y'].values, 
+                    (1.0 / df_oof['stop_sell_odds']).values,
+                    df_oof['I_valid'].values
+                ])
+                
                 df_oof['P_ens'] = stacker_exo.predict(P_mat, df_oof['race_id'].values)
-                theta_input = df_oof[['race_id', 'horse_code', 'finish_position']].copy()
-                theta_input['P_model'] = df_oof['P_ens']
-                theta_csv = artifact('wf_theta_input.csv')
-                theta_input.to_csv(theta_csv, index=False)
-                theta_fit = calibrate_global(csv_path=theta_csv, n_bootstrap=0)
-                theta_2 = theta_fit['theta_2']
-                theta_3 = theta_fit['theta_3']
             except Exception as e:
                 pass
 
         # --- 5. Refit drift forecaster ---
         forecaster = _refit_drift_forecaster(train_start, train_end)
-        _persist_live_config('live_config.json', shrinkage=shrinkage, theta_2=theta_2, theta_3=theta_3, theta_place=theta_place, theta_model_place=theta_model_place)
+        _persist_live_config('artifacts/live_config.json', shrinkage=shrinkage, theta_2=theta_2, theta_3=theta_3, theta_place=theta_place, theta_model_place=theta_model_place)
 
         # --- 6. Backtest ---
         logging.info("Backtesting %s -> %s...", test_window_start, test_window_end)

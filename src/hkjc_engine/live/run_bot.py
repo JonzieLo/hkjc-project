@@ -231,8 +231,8 @@ def build_exotic_table(p_arr_exo: np.ndarray, horse_nos: list[str], live_odds_di
         # --- THE EXOTIC VETO (Syndicate Trap Detection) ---
         if pool in ['QIN', 'QPL']:
             fair_odds = 1.0 / p_model
-            if odds < fair_odds * 0.65: continue
-            if odds > fair_odds * 2.0: continue
+            if odds < fair_odds * 0.65: stake = 0
+            if odds > fair_odds * 2.0: stake = 0
 
         if win_drift_df is not None and not win_drift_df.empty:
             combo_drift = project_drift_to_exotic(win_drift_df, h_nums)
@@ -243,6 +243,12 @@ def build_exotic_table(p_arr_exo: np.ndarray, horse_nos: list[str], live_odds_di
         eff_shr = lookup_shrinkage(min_p_pub, SHRINKAGE) ** comb_len
 
         stake, ev_eff = _size_drift_aware(p_model, odds, pool=pool, drift=override, eff_shrinkage=eff_shr)
+
+        if pool in ['QIN', 'QPL']:
+            fair_odds = 1.0 / p_model
+            # if odds < fair_odds * 0.65 or odds > fair_odds * 2.0:
+            #     stake = 0.0
+
         rows.append({'combo': key, 'live': odds, 'fair': round(1.0 / p_model, 1), 'p_model': p_model, 'ev': ev_eff, 'stake': stake, 'eff_shrinkage': eff_shr})
 
     df = pd.DataFrame(rows)
@@ -451,7 +457,7 @@ def _size_pla_pool(p_arr_pla: np.ndarray, horse_nos, codes, results: pd.DataFram
         if pd.isna(p_odds) or p_odds < 1.0: continue
         
         # We blend the PLA stacker output with Copula PLA probabilities for stability if Copula goes haywire
-        pp_model = p_arr_pla[i]
+        pp_model = sim_pla_probs.get(str(hn), 0.0)
         
         if win_drift_df is not None and not win_drift_df.empty:
             single = project_drift_to_exotic(win_drift_df, [int(hn)])
