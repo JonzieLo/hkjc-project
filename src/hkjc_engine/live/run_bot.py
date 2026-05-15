@@ -281,18 +281,18 @@ def handle_discord_pool(venue, race_no, pool_name, is_empty, message_content):
                 if resp.status_code in (200, 204): 
                     r_cache.set(msg_key, resp.json()['id'])
                 else: 
-                    print(f"❌ Discord Error (New after 404): {resp.status_code} - {resp.text}")
+                    print(f"Discord Error (New after 404): {resp.status_code} - {resp.text}")
             elif resp.status_code not in (200, 204):
-                print(f"❌ Discord Error (Edit): {resp.status_code} - {resp.text}")
+                print(f"Discord Error (Edit): {resp.status_code} - {resp.text}")
         else:
             wh = DiscordWebhook(url=WEBHOOK_URL.strip('"\''), content=message_content)
             resp = wh.execute()
             if resp.status_code in (200, 204): 
                 r_cache.set(msg_key, resp.json()['id'])
             else: 
-                print(f"❌ Discord Error (New): {resp.status_code} - {resp.text}")
+                print(f"Discord Error (New): {resp.status_code} - {resp.text}")
     except Exception as e: 
-        print(f"❌ Discord Webhook Execution Error: {e}")
+        print(f"Discord Webhook Execution Error: {e}")
 
 def send_to_discord(venue, race_no, meta, df_win, df_pla, df_qin, df_qpl, df_tri, is_closing=False):
     time_str = meta.get('time', 'Unknown') if isinstance(meta, dict) else 'Unknown'
