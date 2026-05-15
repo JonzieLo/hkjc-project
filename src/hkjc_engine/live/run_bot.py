@@ -419,7 +419,7 @@ def run_prediction_for_race(predictor, venue, race_no, snap_logger, is_closing=F
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error formatting Discord Message: {e}")
+        print(f"Error formatting Discord Message: {e}")
 
 def _size_win_pool(p_arr_win: np.ndarray, horse_nos, codes, live_odds, win_drift_df: pd.DataFrame, p_pub: np.ndarray) -> pd.DataFrame:
     from hkjc_engine.models.betting_policy import lookup_shrinkage
