@@ -244,8 +244,8 @@ class SnapshotLogger:
                     CASE upper(pool)
                         WHEN 'QUINELLA'       THEN 'QIN'
                         WHEN 'QUINELLA PLACE' THEN 'QPL'
-                        WHEN 'TIERCE'         THEN 'TRI'
                         WHEN 'TRIO'           THEN 'TRI'
+                        WHEN 'WIN'            THEN 'WIN'
                         WHEN 'WINNER'         THEN 'WIN'
                         WHEN 'PLACE'          THEN 'PLA'
                         ELSE upper(pool)

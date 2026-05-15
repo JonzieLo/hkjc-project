@@ -265,22 +265,34 @@ def handle_discord_pool(venue, race_no, pool_name, is_empty, message_content):
             print(f"\n--- [{venue} R{race_no} {pool_name}] (no Discord) ---")
             print(message_content)
         return
-    msg_key = f"discord_msg_id:{venue}:{race_no}:{pool_name}"
+        
+    today_str = datetime.datetime.now().strftime('%Y%m%d')
+    msg_key = f"discord_msg_id:{today_str}:{venue}:{race_no}:{pool_name}"
     existing = r_cache.get(msg_key)
     if is_empty and not existing: return
+    
     try:
         if existing:
-            wh = DiscordWebhook(url=WEBHOOK_URL, id=existing, content=message_content)
+            wh = DiscordWebhook(url=WEBHOOK_URL.strip('"\''), id=existing, content=message_content)
             resp = wh.edit()
             if resp.status_code == 404:
-                wh = DiscordWebhook(url=WEBHOOK_URL, content=message_content)
+                wh = DiscordWebhook(url=WEBHOOK_URL.strip('"\''), content=message_content)
                 resp = wh.execute()
-                if resp.status_code in (200, 204): r_cache.set(msg_key, resp.json()['id'])
+                if resp.status_code in (200, 204): 
+                    r_cache.set(msg_key, resp.json()['id'])
+                else: 
+                    print(f"Discord Error (New after 404): {resp.status_code} - {resp.text}")
+            elif resp.status_code not in (200, 204):
+                print(f"Discord Error (Edit): {resp.status_code} - {resp.text}")
         else:
-            wh = DiscordWebhook(url=WEBHOOK_URL, content=message_content)
+            wh = DiscordWebhook(url=WEBHOOK_URL.strip('"\''), content=message_content)
             resp = wh.execute()
-            if resp.status_code in (200, 204): r_cache.set(msg_key, resp.json()['id'])
-    except Exception as e: pass
+            if resp.status_code in (200, 204): 
+                r_cache.set(msg_key, resp.json()['id'])
+            else: 
+                print(f"Discord Error (New): {resp.status_code} - {resp.text}")
+    except Exception as e: 
+        print(f"Discord Webhook Execution Error: {e}")
 
 def send_to_discord(venue, race_no, meta, df_win, df_pla, df_qin, df_qpl, df_tri, is_closing=False):
     time_str = meta.get('time', 'Unknown') if isinstance(meta, dict) else 'Unknown'
@@ -404,7 +416,10 @@ def run_prediction_for_race(predictor, venue, race_no, snap_logger, is_closing=F
     end = time.perf_counter()
     print(f"R{race_no}: WIN={_n(df_win)} PLA={_n(df_pla)} QIN={_n(df_qin)} QPL={_n(df_qpl)} TRI={_n(df_tri)} | total_stake=${sum(_s(d) for d in all_dfs):,.0f} | Latency: {(end-start)*1000:.1f}ms")
     try: send_to_discord(venue, race_no, meta, df_win, df_pla, df_qin, df_qpl, df_tri, is_closing=is_closing)
-    except Exception as e: pass
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Error formatting Discord Message: {e}")
 
 def _size_win_pool(p_arr_win: np.ndarray, horse_nos, codes, live_odds, win_drift_df: pd.DataFrame, p_pub: np.ndarray) -> pd.DataFrame:
     from hkjc_engine.models.betting_policy import lookup_shrinkage

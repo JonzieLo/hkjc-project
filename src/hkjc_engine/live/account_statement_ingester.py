@@ -536,8 +536,8 @@ def reconcile_with_dividends(db_url: str, dividend_unit_base: float = 10.0) -> i
                 CASE upper(pool)
                     WHEN 'QUINELLA'       THEN 'QIN'
                     WHEN 'QUINELLA PLACE' THEN 'QPL'
-                    WHEN 'TIERCE'         THEN 'TRI'
                     WHEN 'TRIO'           THEN 'TRI'
+                    WHEN 'WIN'            THEN 'WIN'
                     WHEN 'WINNER'         THEN 'WIN'
                     WHEN 'PLACE'          THEN 'PLA'
                     ELSE upper(pool)
