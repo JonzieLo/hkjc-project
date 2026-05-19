@@ -128,12 +128,12 @@ def run_walk_forward_validation(train_start: str = '2018-01-01',
         print(f"TRAIN: {train_start} -> {train_end}")
         print(f"TEST : {test_window_start} -> {test_window_end}")
 
+        model_b_path  = artifact('wf_model_b.pkl')
         # --- 1. Train Models ---
         model_a_win_path  = artifact('wf_model_a.pkl')
         calib_a_win_path  = artifact('wf_calib_a.pkl')
         model_a_pla_path  = artifact('wf_model_a_pla.pkl')
         calib_a_pla_path  = artifact('wf_calib_a_pla.pkl')
-        model_b_path  = artifact('wf_model_b.pkl')
         calib_b_path  = artifact('wf_calib_b.pkl')
 
         logging.info("Training Model A (WIN Residual)...")

@@ -1,43 +1,66 @@
 # HKJC Benter Engine
 
-A parimutuel pricing engine for the Hong Kong Jockey Club (HKJC). Combines an XGBoost model and Cox proportional hazards model, synthesized via PyMC Bayesian Stacking. Exotic pool (QIN/QPL/TRI) pricing is resolved using N-dimentional Student-t Copulas to model heavy-tailed join probabilities, and bets are sized via a fractional Kelly with Smocynski-Tomkins simultaneous-stake caps.
+**[Read the Research Memo (PDF)](./memo.pdf)** | **[Companion Site](https://v0-jlo.vercel.app/)**
 
-> **Disclaimer.** This is research code shared for educational and archival purposes. Backtested returns are out-of-sample but walk-forward backtests still systematically overstate live performance — see the [Known Caveats](#known-caveats) section before drawing any conclusions. Gambling carries real financial risk, and parimutuel markets with 17.5% track takeout are particularly unforgiving. Do not deploy this code with money you cannot afford to lose.
+A parimutuel research and execution stack for the Hong Kong Jockey Club. An XGBoost market-residual ranker and a Cox proportional-hazards survival model are fused through a PyMC Bayesian hierarchical stacker (ADVI). Exotic pools (QIN/QPL/TRI) are priced with an N-dimensional Student-t copula over Gamma race-time marginals; bets are sized with drift-aware fractional Kelly under Smoczyński–Tomkins simultaneous-stake caps.
 
----
-
-## Walk-Forward Backtest Results
-
-| Metric            | Value               |
-|-------------------|---------------------|
-| Period            | 2024-01 → 2026-05 (25 monthly windows) |
-| Bets placed       | 799                 |
-| Total staked      | $349,835            |
-| Net profit        | +$23,181            |
-| Win rate          | 6.38%               |
-| ROI               | +6.63%              |
-| Starting bankroll | $100,000            |
-| Ending bankroll   | $123,180.88         |
-| OOF log-loss      | 0.23840  (vs 0.23936 public consensus) |
-
-These numbers reflect idealized execution against final settled dividends. See [Known Caveats](#known-caveats) for how much of this is inflated by late-money drift.
-
-
---- 
-## Per-Pool Breakdown
-
-The multi-agent stacker reveals heavy variance across different parimutuel pools. Fundamental physical edge successfully translates to profit in the Win and heavy-tailed Trifecta pools, while the model struggles to beat the takeout in Quinella and Place markets.
-| Pool  | Bets | Win Rate   | Staked    | Profit    | ROI       | 
-|-------|------|------------|-----------|-----------|-----------|
-| WIN   | 124  | 8.06%      | $53,981   | +$7,473   | +13.84%   |
-| PLA   | 38   | 0.00%      | $928      | -$928     | -100%     |
-| QIN   | 91   | 3.30%      | $39,286   | -$8,193   | -20.85%   |
-| QPL   | 170  | 16.47%     | $98,920   | -$4,618   | -4,67%    |
-| TRI   | 376  | 2.66%      | $146,593  | +$52,763  | +35.99%   |
+> **Disclaimer.** Research code, shared for archival purposes. The walk-forward backtest is out-of-sample but still overstates live performance for the reasons documented in the [memo](memo.pdf) and in [Known Caveats](#known-caveats) below. Gambling on a 17.5%-takeout pool is financially unforgiving. Do not deploy with money you cannot lose.
 
 ---
 
-## Architecturez
+## What this repo currently supports as a claim
+
+The full memo is in [`memo.pdf`](memo.pdf). The short version:
+
+- **WIN pool, in log-loss space**: OOF log-loss **0.2378 vs 0.2389** public-consensus baseline on the same 5,473 races / 66,135 entries — a small but genuine ~0.4% relative improvement that is the most defensible thing in the project.
+- **Exotic pool backtest ROI is not yet a credible claim.** Earlier walk-forward exotic ROI numbers were inflated by a STOP_SELL anchor gap (~98.5% of training rows on a fallback odds column), a PLA settlement defect, and a structural divergence between the backtester's bet-selection policy and how a human operator actually plays the card. Details in §4 of the memo.
+- **Live operator tape is positive but small-sample.** A 3-race-day window in May 2026 produced +130% ROI on 93 manually executed bets, with ~76% of P&L from three tickets. Reported as observation, not as a model claim. See below and §3.4 of the memo.
+
+If you came here from the resume, the artifact to read is the memo, not the tables on this page.
+
+---
+
+## Walk-forward backtest — WIN pool
+
+| Metric                | Value (WIN pool, 2024-01 → 2026-05) |
+|-----------------------|--------------------------------------|
+| Races covered         | 5,473                                |
+| Entries               | 66,135                               |
+| Retraining cadence    | 6-month rolling window               |
+| OOF log-loss (model)  | **0.2378**                           |
+| OOF log-loss (public) | 0.2389                               |
+| Relative improvement  | ~0.4% (small, but consistent)        |
+
+Per-pool ROI numbers are reported in the memo with bootstrap 95% CIs. None of the exotic-pool point estimates currently survive an honest CI test; they are reported for transparency, not as a claim of edge.
+
+---
+
+## Live operator tape — May 2026
+
+The author has been placing bets manually against the live engine's signals. **This is operator results, not a model backtest** — bet selection differs from the walk-forward policy in ways documented in §4.5 of the memo. Reported here for completeness.
+
+| Pool    | Bets | Hit rate | Staked (HK$) | P&L (HK$)   | ROI         |
+|---------|-----:|---------:|-------------:|------------:|------------:|
+| PLA     |    7 |    57.1% |       11,500 |     +12,550 |    +109.1%  |
+| QIN     |   16 |     6.3% |        4,690 |      +9,085 |    +193.7%  |
+| QPL     |   32 |    18.8% |        8,180 |      +8,932 |    +109.2%  |
+| TRI     |   38 |     7.9% |        8,650 |     +12,582 |    +145.5%  |
+| **All** | **93** | — | **33,020** | **+43,149** | **+130.7%** |
+
+*Source: `placed_bets` production table, 2026-05-06 → 2026-05-17, three race days.*
+
+**Disclaimer:**
+
+- **Three race days** 95% confidence intervals on these ROIs are wide.
+- **Concentration is heavy.** The top three winning tickets (QIN 4-9 @ HK$27.55 on May 13, TRI 4-9-10 @ HK$53 on May 13, QPL 5-7 @ HK$14.45 on May 17) account for ~76% of total P&L. Strip those three tickets and the tape is roughly +31% ROI on the remaining 90 bets — still positive, but a very different story.
+- **May 13 alone was +HK$34,924 (+275% ROI on that day).** One profitable card is not edge.
+- **This is not a clean out-of-sample test of the model.** The operator (me) chose which signals to act on; the backtester does not. See memo §4.5.
+
+What the tape *is* good for: confirming that the model's signals on exotic pools can land in real markets with real money, and my filter set (short-odds PLA, tighter exotic bet choices) is at least directionally consistent with the engine's edge. That is a different claim from "the model has positive ROI."
+
+---
+
+## Architecture
 
 ```
                     ┌──────────────────────────────┐

@@ -209,7 +209,7 @@ class MultiPoolBacktester(XGBEnsembleBacktester):
     def _size_exotic(self, p_arr_exo: np.ndarray, p_public: np.ndarray, horse_nos: list[str],
                      pool: str, calc_func, comb_len: int, win_drift_df: pd.DataFrame,
                      sim_pool_probs: dict[str, float], live_combo_odds: dict[str, float] | None = None) -> pd.DataFrame:
-        TOP_K_PER_RACE = {'QIN': 5, 'QPL': 5, 'TRI': 4}
+        TOP_K_PER_RACE = {'QIN': 3, 'QPL': 3, 'TRI': 3}
         top_k = TOP_K_PER_RACE.get(pool.upper(), 5)
 
         n = len(p_arr_exo)
@@ -272,11 +272,19 @@ class MultiPoolBacktester(XGBEnsembleBacktester):
         pool_base_hurdle = 0.02
         pool_lambda_d = 4.0
         if pool == 'PLA':
-            if odds < 3.0: pool_base_hurdle = 0.08
+            if odds < 3.0:
+                pool_base_hurdle = 0.08
+            elif odds < 8.0:
+                pool_base_hurdle = 0.05
+            elif odds < 15.0:
+                pool_base_hurdle = 0.08
+            else:
+                return 0.0, ev_eff
         elif pool in ['QIN', 'QPL']:
             pool_lambda_d = 7.0 
         elif pool == 'TRI':
             pool_lambda_d = 4.0
+            pool_base_hurdle = 0.05
             
         hurdle = get_ev_hurdle(odds, base=pool_base_hurdle, longshot_buffer=0.015, longshot_threshold=15.0, pool=pool, lambda_d=pool_lambda_d, drift_override=drift)
         if ev_eff < hurdle: return 0.0, ev_eff

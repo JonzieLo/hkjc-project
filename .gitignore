@@ -61,6 +61,7 @@ pace_copula.npy
 run_for_claude.py
 rebuild_tape.py
 mock_live_tape.py
+hkjc_memo_analysis.py
 
 # ============ Data dumps ============
 *.sql.gz
